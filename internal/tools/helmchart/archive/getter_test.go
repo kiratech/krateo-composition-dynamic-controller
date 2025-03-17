@@ -8,15 +8,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/gobuffalo/flect"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/snowplow/apis"
 	"github.com/krateoplatformops/snowplow/plumbing/e2e"
 	xenv "github.com/krateoplatformops/snowplow/plumbing/env"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -49,6 +52,19 @@ var (
 const (
 	testdataPath = "../../../../testdata"
 )
+
+type FakePluralizer struct {
+}
+
+var _ pluralizer.PluralizerInterface = &FakePluralizer{}
+
+func (p FakePluralizer) GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
+	return schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: flect.Pluralize(strings.ToLower(gvk.Kind)),
+	}, nil
+}
 
 func TestMain(m *testing.M) {
 	xenv.SetTestMode(true)
@@ -226,8 +242,9 @@ func TestGetter(t *testing.T) {
 				t.Fatal(err)
 				return ctx
 			}
+			pluralizer := FakePluralizer{}
 
-			gt, err := archive.Dynamic(c.Client().RESTConfig(), logging.NewNopLogger())
+			gt, err := archive.Dynamic(c.Client().RESTConfig(), logging.NewNopLogger(), pluralizer)
 			if err != nil {
 				t.Fatal(err)
 				return ctx

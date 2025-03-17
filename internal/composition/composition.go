@@ -149,7 +149,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		WithBaseName(meta.GetReleaseName(mg)).
 		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
 	if err != nil {
-		log.Debug("Generating RBAC", "error", err)
+		log.Debug("Generating RBAC using chart-inspector", "error", err)
 		return controller.ExternalObservation{}, err
 	}
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
@@ -196,8 +196,11 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	modifiedResources := tracer.GetResources()
 	if len(modifiedResources) > 0 {
 		for _, resource := range modifiedResources {
-			log.Debug("Composition resource modified", "Name", resource.Name, "Namespace", resource.Namespace, "Group", resource.Group, "Version", resource.Version, "Resource", resource.Resource)
+			if meta.IsVerbose(mg) {
+				log.Debug("Composition resource modified", "Name", resource.Name, "Namespace", resource.Namespace, "Group", resource.Group, "Version", resource.Version, "Resource", resource.Resource)
+			}
 		}
+		log.Debug("Composition resources modified", "count", len(modifiedResources))
 		return controller.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: false,
@@ -251,7 +254,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 
 	if meta.ExternalCreateIncomplete(mg) {
 		log.Debug(errCreateIncomplete)
-		err := unstructuredtools.SetCondition(mg, condition.Creating())
+		err := unstructuredtools.SetConditions(mg, condition.Creating())
 		if err != nil {
 			return err
 		}
@@ -287,7 +290,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		WithBaseName(meta.GetReleaseName(mg)).
 		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
 	if err != nil {
-		log.Debug("Generating RBAC", "error", err)
+		log.Debug("Generating RBAC using chart-inspector", "error", err)
 		return err
 	}
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
@@ -390,7 +393,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	// do is to refuse to proceed.
 	if meta.ExternalCreateIncomplete(mg) {
 		log.Debug(errCreateIncomplete)
-		_ = unstructuredtools.SetCondition(mg, condition.Creating())
+		_ = unstructuredtools.SetConditions(mg, condition.Creating())
 
 		_, err := tools.UpdateStatus(ctx, mg, tools.UpdateOptions{
 			Pluralizer:    h.pluralizer,
@@ -420,16 +423,6 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	if err != nil {
 		return err
 	}
-
-	// meta.SetExternalCreatePending(mg, time.Now())
-	// mg, err = tools.Update(ctx, mg, tools.UpdateOptions{
-	// 	Pluralizer:    h.pluralizer,
-	// 	DynamicClient: h.dynamicClient,
-	// })
-	// if err != nil {
-	// 	log.Debug("Setting meta create pending annotation.", "error", err)
-	// 	return err
-	// }
 
 	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
 	if err != nil {
@@ -514,7 +507,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		WithBaseName(meta.GetReleaseName(mg)).
 		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
 	if err != nil {
-		log.Debug("Generating RBAC", "error", err)
+		log.Debug("Generating RBAC using chart-inspector", "error", err)
 		return err
 	}
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)

@@ -3,7 +3,6 @@ package composition
 import (
 	"fmt"
 
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/elementsmatch"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
@@ -35,7 +34,7 @@ func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message 
 	}
 	cond := condition.Available()
 	cond.Message = message
-	err := unstructuredtools.SetCondition(mg, cond)
+	err := unstructuredtools.SetConditions(mg, cond)
 	if err != nil {
 		return fmt.Errorf("setting condition: %w", err)
 	}
@@ -50,21 +49,6 @@ func setManagedResources(mg *unstructured.Unstructured, managed []interface{}) {
 	mapstatus := status.(map[string]interface{})
 	mapstatus["managed"] = managed
 	mg.Object["status"] = mapstatus
-}
-
-func checkManaged(mg *unstructured.Unstructured, managed []interface{}) (bool, error) {
-	status := mg.Object["status"]
-	if status == nil {
-		return false, fmt.Errorf("status not found")
-	}
-	mapstatus := status.(map[string]interface{})
-	managedStatus := mapstatus["managed"]
-
-	if managedStatus == nil {
-		return false, nil
-	}
-
-	return elementsmatch.ElementsMatch(managedStatus, managed)
 }
 
 func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resources []objectref.ObjectRef) ([]interface{}, error) {

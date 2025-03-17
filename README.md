@@ -49,18 +49,20 @@ The manifest described above represents a Custom Resource (CR) of kind Postgresq
 
 These enviroment varibles can be changed in the Deployment of the composition-dynamic-controller we need to tweak.
 
-| Name                                   | Description                | Default Value |
-|:---------------------------------------|:---------------------------|:--------------|
-| COMPOSITION_CONTROLLER_DEBUG           | dump verbose output        | false         |
-| COMPOSITION_CONTROLLER_WORKERS         | number of workers          | 1             |
-| COMPOSITION_CONTROLLER_RESYNC_INTERVAL | resync interval            | 3m            |
-| COMPOSITION_CONTROLLER_GROUP           | resource api group         |               |
-| COMPOSITION_CONTROLLER_VERSION         | resource api version       |               |
-| COMPOSITION_CONTROLLER_RESOURCE        | resource plural name       |               |
-| COMPOSITION_CONTROLLER_SA_NAME         | cdc deployment ServiceAccount name |  |
-| COMPOSITION_CONTROLLER_SA_NAMESPACE        | cdc deployment ServiceAccount namespace |  |
-| URL_PLURALS                            | url to krateo pluraliser service       |  http://bff.krateo-system.svc.cluster.local:8081/api-info/names             |   
-| URL_CHART_INSPECTOR                    | url to chart inspector   |  http://chart-inspector.krateo-system.svc.cluster.local:8081/             |   
+| Name                                   | Description                | Default Value | Notes         |
+|:---------------------------------------|:---------------------------|:--------------|:--------------|
+| COMPOSITION_CONTROLLER_DEBUG           | dump verbose output        | false         |               |
+| COMPOSITION_CONTROLLER_WORKERS         | number of workers          | 1             |               |
+| COMPOSITION_CONTROLLER_RESYNC_INTERVAL | resync interval            | 3m            |               |               
+| COMPOSITION_CONTROLLER_GROUP           | resource api group         |               | populated by `core-provider` |
+| COMPOSITION_CONTROLLER_VERSION         | resource api version       |               | populated by `core-provider` |
+| COMPOSITION_CONTROLLER_RESOURCE        | resource plural name       |               | populated by `core-provider` |
+| COMPOSITION_CONTROLLER_SA_NAME         | cdc deployment ServiceAccount name |  | populated by `core-provider` |
+| COMPOSITION_CONTROLLER_SA_NAMESPACE        | cdc deployment ServiceAccount namespace | populated by `core-provider` |
+| URL_PLURALS                            | url to krateo pluraliser service       | `http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names`  |   
+| URL_CHART_INSPECTOR                    | url to chart inspector   |  `http://chart-inspector.krateo-system.svc.cluster.local:8081/`             |   
 | KRATEO_NAMESPACE                       | namespace where krateo is installed       |  krateo-system |
 | HELM_REGISTRY_CONFIG_PATH | default helm config path | /tmp |
 | HELM_MAX_HISTORY | Max Helm History | 10 |
+| COMPOSITION_MAX_ERROR_RETRY_INTERVAL | The maximum interval between retries when an error occurs. This should be less than the half of the poll interval. |  0m |
+| COMPOSITION_MIN_ERROR_RETRY_INTERVAL | The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval. | 1m |

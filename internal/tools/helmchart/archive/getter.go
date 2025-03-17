@@ -9,7 +9,7 @@ import (
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -60,7 +60,7 @@ func Static(chart string) Getter {
 	return staticGetter{chartName: chart}
 }
 
-func Dynamic(cfg *rest.Config, log logging.Logger) (Getter, error) {
+func Dynamic(cfg *rest.Config, log logging.Logger, pluralizer pluralizer.PluralizerInterface) (Getter, error) {
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -69,6 +69,7 @@ func Dynamic(cfg *rest.Config, log logging.Logger) (Getter, error) {
 	return &dynamicGetter{
 		dynamicClient: dyn,
 		logger:        log,
+		pluralizer:    pluralizer,
 	}, nil
 }
 
@@ -89,14 +90,14 @@ var _ Getter = (*dynamicGetter)(nil)
 type dynamicGetter struct {
 	dynamicClient dynamic.Interface
 	logger        logging.Logger
+	pluralizer    pluralizer.PluralizerInterface
 }
 
 func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
-	gvr, err := unstructuredtools.GVR(uns)
+	gvr, err := g.pluralizer.GVKtoGVR(uns.GroupVersionKind())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error getting GVR for Kind: '%v', Group: '%v, Version: '%v'", uns.GroupVersionKind().Kind, uns.GroupVersionKind().Group, uns.GroupVersionKind().Version)
 	}
-	g.logger.Debug("Infered GVR", "gvr", gvr.String(), "kind", uns.GetKind())
 
 	gvrForDefinitions := schema.GroupVersionResource{
 		Group:    "core.krateo.io",
@@ -110,15 +111,14 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	g.logger.Debug("Found compositiondefinitions", "count", len(all.Items), "type", gvrForDefinitions.String())
 
 	tot := len(all.Items)
 	if tot == 0 {
 		return nil,
-			fmt.Errorf("no definition found for '%v' in namespace: %s", gvr, uns.GetNamespace())
+			fmt.Errorf("no definition found for '%v' in namespace: %s", gvr.String(), uns.GetNamespace())
 	}
-	compositionDefinition := all.Items[0]
 
+	compositionDefinition := all.Items[0]
 	if tot > 1 {
 		found := false
 		for _, el := range all.Items {
@@ -155,7 +155,7 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 		}
 		if !found {
 			return nil,
-				fmt.Errorf("too many definitions [%d] found for '%v' in namespace: %s", tot, gvr, uns.GetNamespace())
+				fmt.Errorf("too many definitions [%d] found for '%v' in namespace: %s", tot, gvr.String(), uns.GetNamespace())
 		}
 	}
 
@@ -168,7 +168,7 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 		return nil,
 			fmt.Errorf("missing 'status.packageUrl' in definition for '%v' in namespace: %s", gvr, uns.GetNamespace())
 	}
-	g.logger.Debug("packageUrl for", "name", compositionDefinition.GetName(), "namespace", compositionDefinition.GetNamespace(), "url", packageUrl)
+	g.logger.Debug("PackageUrl for", "name", compositionDefinition.GetName(), "namespace", compositionDefinition.GetNamespace(), "url", packageUrl)
 
 	packageVersion, _, err := unstructured.NestedString(compositionDefinition.UnstructuredContent(), "spec", "chart", "version")
 	if err != nil {

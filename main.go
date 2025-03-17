@@ -20,6 +20,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
@@ -57,13 +58,17 @@ func main() {
 	chart := flag.String("chart",
 		env.String("COMPOSITION_CONTROLLER_CHART", ""), "chart")
 	urlplurals := flag.String("urlplurals",
-		env.String("URL_PLURALS", "http://bff.krateo-system.svc.cluster.local:8081/api-info/names"), "url plurals")
+		env.String("URL_PLURALS", "http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names"), "url plurals")
 	urlChartInspector := flag.String("urlChartInspector",
 		env.String("URL_CHART_INSPECTOR", "http://chart-inspector.krateo-system.svc.cluster.local:8081/"), "url chart inspector")
 	saName := flag.String("saName",
 		env.String("COMPOSITION_CONTROLLER_SA_NAME", ""), "service account name")
 	saNamespace := flag.String("saNamespace",
 		env.String("COMPOSITION_CONTROLLER_SA_NAMESPACE", ""), "service account namespace")
+	maxErrorRetryInterval := flag.Duration("max-error-retry-interval",
+		env.Duration("COMPOSITION_MAX_ERROR_RETRY_INTERVAL", 60*time.Second), "The maximum interval between retries when an error occurs. This should be less than the half of the poll interval.")
+	minErrorRetryInterval := flag.Duration("min-error-retry-interval",
+		env.Duration("COMPOSITION_MIN_ERROR_RETRY_INTERVAL", 1*time.Second), "The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval.")
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
@@ -102,12 +107,13 @@ func main() {
 	if err != nil {
 		log.Debug("Creating event recorder.", "error", err)
 	}
+	pluralizer := pluralizer.New(urlplurals, http.DefaultClient)
 
 	var pig archive.Getter
 	if len(*chart) > 0 {
 		pig = archive.Static(*chart)
 	} else {
-		pig, err = archive.Dynamic(cfg, log)
+		pig, err = archive.Dynamic(cfg, log, pluralizer)
 		if err != nil {
 			log.Debug("Creating chart url info getter.", "error", err)
 		}
@@ -127,7 +133,6 @@ func main() {
 	}
 	labelselector := labels.NewSelector().Add(*labelreq)
 
-	pluralizer := pluralizer.New(urlplurals, http.DefaultClient)
 	chartInspector := chartinspector.NewChartInspector(*urlChartInspector)
 	rbacgen := rbacgen.NewRBACGen(*saName, *saNamespace, &chartInspector)
 	handler := composition.NewHandler(cfg, log, pig, rec, dyn, cachedDisc, *pluralizer, rbacgen)
@@ -149,7 +154,8 @@ func main() {
 		ListWatcher: controller.ListWatcherConfiguration{
 			LabelSelector: ptr.To(labelselector.String()),
 		},
-		Pluralizer: *pluralizer,
+		Pluralizer:        *pluralizer,
+		GlobalRateLimiter: workqueue.NewExponentialTimedFailureRateLimiter[any](*minErrorRetryInterval, *maxErrorRetryInterval),
 	})
 	controller.SetExternalClient(handler)
 

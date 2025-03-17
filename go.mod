@@ -11,7 +11,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/golang/mock v1.6.0
 	github.com/krateoplatformops/snowplow v0.0.0-20250211094905-3ea1b567e898
-	github.com/krateoplatformops/unstructured-runtime v0.0.9
+	github.com/krateoplatformops/unstructured-runtime v0.1.1
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/pflag v1.0.5
@@ -159,7 +159,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiserver v0.32.0 // indirect
 	k8s.io/component-base v0.32.1 // indirect
-	k8s.io/gengo v0.0.0-20240911193312-2b36238f13e9 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f // indirect
 	k8s.io/kubectl v0.30.3 // indirect

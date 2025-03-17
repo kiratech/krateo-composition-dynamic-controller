@@ -154,8 +154,9 @@ func TestController(t *testing.T) {
 			log := logging.NewLogrLogger(zl.WithName("composition-controller-test"))
 
 			var pig archive.Getter
+			pluralizer := FakePluralizer{}
 
-			pig, err = archive.Dynamic(cfg.Client().RESTConfig(), log)
+			pig, err = archive.Dynamic(cfg.Client().RESTConfig(), log, pluralizer)
 			if err != nil {
 				t.Error("Creating chart url info getter.", "error", err)
 				return ctx
@@ -181,7 +182,6 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			pluralizer := FakePluralizer{}
 			chartInspector := chartinspector.NewChartInspector(chartInspectorUrl)
 			rbacgen := rbacgen.NewRBACGen("test-sa", altNamespace, &chartInspector)
 			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, rec, dyn, cachedDisc, pluralizer, rbacgen)

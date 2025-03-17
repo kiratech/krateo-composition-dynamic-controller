@@ -234,8 +234,6 @@ spec:
                   metricType:
                     default: cost
                     type: string
-                  pollingIntervalHours:
-                    type: integer
                   scraperDatabaseConfigRef:
                     properties:
                       name:
@@ -251,7 +249,6 @@ spec:
                   url:
                     type: string
                 required:
-                - pollingIntervalHours
                 - scraperDatabaseConfigRef
                 - tableName
                 type: object

@@ -56,9 +56,6 @@ spec:
                 type: object
               scraperConfig:
                 properties:
-                  pollingIntervalHours:
-                    default: 1
-                    type: integer
                   scraperDatabaseConfigRef:
                     properties:
                       name:
@@ -75,7 +72,6 @@ spec:
                     default: pricing_table
                     type: string
                 required:
-                - pollingIntervalHours
                 - scraperDatabaseConfigRef
                 - tableName
                 type: object
