@@ -1,0 +1,12 @@
+on:
+  schedule:
+    - cron: '0 2 * * *' 
+  workflow_dispatch: # Allows manual triggering
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  auto-sync:
+    uses: kiratech/krateo-core-provider/.github/workflows/auto-sync.yaml@main
