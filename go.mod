@@ -11,7 +11,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/golang/mock v1.6.0
 	github.com/krateoplatformops/snowplow v0.0.0-20250211094905-3ea1b567e898
-	github.com/krateoplatformops/unstructured-runtime v0.1.1
+	github.com/krateoplatformops/unstructured-runtime v0.1.2
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/pflag v1.0.5
