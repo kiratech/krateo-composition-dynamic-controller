@@ -32,8 +32,8 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 
-	"github.com/krateoplatformops/snowplow/plumbing/e2e"
-	xenv "github.com/krateoplatformops/snowplow/plumbing/env"
+	"github.com/krateoplatformops/plumbing/e2e"
+	xenv "github.com/krateoplatformops/plumbing/env"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	memory "k8s.io/client-go/discovery/cached"
@@ -84,7 +84,6 @@ func TestMain(m *testing.M) {
 	testenv = env.New()
 
 	testenv.Setup(
-		// envfuncs.CreateCluster(kind.NewProvider().WithPath(filepath.Join(manifestsPath, "kind.yaml")), clusterName),
 		envfuncs.CreateClusterWithConfig(kind.NewProvider(), clusterName, filepath.Join(manifestsPath, "kind.yaml")),
 		e2e.CreateNamespace(namespace),
 		e2e.CreateNamespace(altNamespace),
@@ -100,8 +99,8 @@ func TestMain(m *testing.M) {
 			return ctx, nil
 		},
 	).Finish(
-		envfuncs.DeleteNamespace(namespace),
-		envfuncs.DestroyCluster(clusterName),
+	// envfuncs.DeleteNamespace(namespace),
+	// envfuncs.DestroyCluster(clusterName),
 	)
 
 	os.Exit(testenv.Run(m))

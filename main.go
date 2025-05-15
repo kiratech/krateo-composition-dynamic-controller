@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,7 +13,7 @@ import (
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/composition"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
-	"github.com/krateoplatformops/snowplow/plumbing/env"
+	"github.com/krateoplatformops/plumbing/env"
 	genctrl "github.com/krateoplatformops/unstructured-runtime"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
@@ -54,11 +53,9 @@ func main() {
 	resourceName := flag.String("resource",
 		env.String("COMPOSITION_CONTROLLER_RESOURCE", ""), "resource plural name")
 	namespace := flag.String("namespace",
-		env.String("COMPOSITION_CONTROLLER_NAMESPACE", "default"), "namespace")
+		env.String("COMPOSITION_CONTROLLER_NAMESPACE", ""), "namespace to watch, empty for all namespaces")
 	chart := flag.String("chart",
 		env.String("COMPOSITION_CONTROLLER_CHART", ""), "chart")
-	urlplurals := flag.String("urlplurals",
-		env.String("URL_PLURALS", "http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names"), "url plurals")
 	urlChartInspector := flag.String("urlChartInspector",
 		env.String("URL_CHART_INSPECTOR", "http://chart-inspector.krateo-system.svc.cluster.local:8081/"), "url chart inspector")
 	saName := flag.String("saName",
@@ -107,7 +104,7 @@ func main() {
 	if err != nil {
 		log.Debug("Creating event recorder.", "error", err)
 	}
-	pluralizer := pluralizer.New(urlplurals, http.DefaultClient)
+	pluralizer := pluralizer.New()
 
 	var pig archive.Getter
 	if len(*chart) > 0 {

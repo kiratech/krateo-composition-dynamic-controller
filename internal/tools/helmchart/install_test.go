@@ -13,8 +13,8 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"helm.sh/helm/v3/pkg/release"
 
-	"github.com/krateoplatformops/snowplow/plumbing/e2e"
-	xenv "github.com/krateoplatformops/snowplow/plumbing/env"
+	"github.com/krateoplatformops/plumbing/e2e"
+	xenv "github.com/krateoplatformops/plumbing/env"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"

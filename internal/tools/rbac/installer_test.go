@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/krateoplatformops/snowplow/plumbing/e2e"
+	"github.com/krateoplatformops/plumbing/e2e"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 	"sigs.k8s.io/e2e-framework/support/kind"
 
-	xenv "github.com/krateoplatformops/snowplow/plumbing/env"
+	xenv "github.com/krateoplatformops/plumbing/env"
 )
 
 var (

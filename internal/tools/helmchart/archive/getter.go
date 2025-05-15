@@ -96,7 +96,7 @@ type dynamicGetter struct {
 func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	gvr, err := g.pluralizer.GVKtoGVR(uns.GroupVersionKind())
 	if err != nil {
-		return nil, fmt.Errorf("error getting GVR for Kind: '%v', Group: '%v, Version: '%v'", uns.GroupVersionKind().Kind, uns.GroupVersionKind().Group, uns.GroupVersionKind().Version)
+		return nil, fmt.Errorf("error getting GVR for Kind: '%v', Group: '%v, Version: '%v': %w", uns.GroupVersionKind().Kind, uns.GroupVersionKind().Group, uns.GroupVersionKind().Version, err)
 	}
 
 	gvrForDefinitions := schema.GroupVersionResource{
