@@ -106,7 +106,6 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	}
 
 	all, err := g.dynamicClient.Resource(gvrForDefinitions).
-		Namespace(uns.GetNamespace()).
 		List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return nil, err

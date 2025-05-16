@@ -36,7 +36,7 @@ func Install(ctx context.Context, opts InstallOptions) (*release.Release, int64,
 		ChartName:       opts.ChartName,
 		CreateNamespace: true,
 		UpgradeCRDs:     true,
-		Wait:            true,
+		Wait:            false,
 		MaxHistory:      opts.MaxHistory,
 	}
 	if opts.Credentials != nil {
