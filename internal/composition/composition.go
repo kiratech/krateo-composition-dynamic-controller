@@ -480,8 +480,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		Namespace:   mg.GetNamespace(),
 		ChartName:   pkg.URL,
 		Version:     pkg.Version,
-		Wait:        true,
-		Timeout:     time.Minute * 3,
+		Wait:        false,
 	}
 
 	err = hc.UninstallRelease(&chartSpec)
