@@ -9,7 +9,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/golang/mock v1.6.0
 	github.com/krateoplatformops/plumbing v0.4.0
-	github.com/krateoplatformops/unstructured-runtime v0.1.3
+	github.com/krateoplatformops/unstructured-runtime v0.1.4
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/pflag v1.0.5
