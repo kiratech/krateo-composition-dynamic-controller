@@ -78,6 +78,24 @@ The **Composition Dynamic Controller (CDC)** is a specialized Kubernetes operato
    - **Upgrade** proceeds *only after* the CRD and RBAC are confirmed active.  
 3. **Result**: Zero downtime; no "helm upgrade failed: CRD missing" errors.
 
+
+## Composition Dynamic Controller Values Injection
+
+The composition-dynamic-controller inject labels and values into the installed resources and in the helm chart release values. This values contains informations about the composition resource associated with the helm release.
+The values are injected in the following way:
+
+| Helm Chart Release Values | Installed Resources Labels | Description |
+|:--------------------------|:---------------------------|:------------|
+| `global.compositionId`    | `krateo.io/composition-id` | The composition resource uid |
+| `global.compositionName`  | `krateo.io/composition-name` | The composition resource name |
+| `global.compositionNamespace` | `krateo.io/composition-namespace` | The composition resource namespace |
+| `global.compositionInstalledVersion` | `krateo.io/composition-installed-version` | The version of the composition resource installed. This value changes if the chart version is upgraded |
+| `global.compositionApiVersion` | not injected | The api version of the composition resource. This values is deprecated but is mainteined for backward compatibility. |
+| `global.compositionGroup` | `krateo.io/composition-group` | The group of the composition resource. |
+| `global.compositionResource` | `krateo.io/composition-resource` | The plural name of the composition resource. |
+| `global.compositionKind` | `krateo.io/composition-kind` | The kind of the composition resource. |
+| `global.krateoNamespace` | `krateo.io/krateo-namespace` | The namespace where Krateo is installed. This value is used to identify the Krateo resources in the cluster. |
+
 ## Configuration
 
 ### Operator Env Vars
@@ -93,8 +111,8 @@ These enviroment varibles can be changed in the Deployment of the composition-dy
 | COMPOSITION_CONTROLLER_VERSION         | resource api version       |               | populated by `core-provider` |
 | COMPOSITION_CONTROLLER_RESOURCE        | resource plural name       |               | populated by `core-provider` |
 | COMPOSITION_CONTROLLER_SA_NAME         | cdc deployment ServiceAccount name |  | populated by `core-provider` |
-| COMPOSITION_CONTROLLER_SA_NAMESPACE        | cdc deployment ServiceAccount namespace | populated by `core-provider` |
-| URL_PLURALS                            | url to krateo pluraliser service       | `http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names`  |   
+| COMPOSITION_CONTROLLER_SA_NAMESPACE        | cdc deployment ServiceAccount namespace | |populated by `core-provider` |
+| URL_PLURALS                            | NOT USED from version 0.17.1 - URL to krateo pluraliser service | `http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names` | Ignored from version 0.17.1 |
 | URL_CHART_INSPECTOR                    | url to chart inspector   |  `http://chart-inspector.krateo-system.svc.cluster.local:8081/`             |   
 | KRATEO_NAMESPACE                       | namespace where krateo is installed       |  krateo-system |
 | HELM_REGISTRY_CONFIG_PATH | default helm config path | /tmp |

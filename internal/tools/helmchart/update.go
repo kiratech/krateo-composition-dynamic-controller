@@ -76,9 +76,19 @@ func Update(ctx context.Context, opts UpdateOptions) (*release.Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to add compositionId to values: %w", err)
 	}
+	// DEPRECATED: Remove in future versions in favor of compositionGroup and compositionInstalledVersion
 	dat, err = AddOrUpdateFieldInValues(dat, opts.Resource.GetAPIVersion(), "global", "compositionApiVersion")
 	if err != nil {
 		return nil, fmt.Errorf("failed to add compositionApiVersion to values: %w", err)
+	}
+	// END DEPRECATED
+	dat, err = AddOrUpdateFieldInValues(dat, gvr.Group, "global", "compositionGroup")
+	if err != nil {
+		return nil, fmt.Errorf("failed to add compositionGroup to values: %w", err)
+	}
+	dat, err = AddOrUpdateFieldInValues(dat, gvr.Version, "global", "compositionInstalledVersion")
+	if err != nil {
+		return nil, fmt.Errorf("failed to add compositionInstalledVersion to values: %w", err)
 	}
 	dat, err = AddOrUpdateFieldInValues(dat, gvr.Resource, "global", "compositionResource")
 	if err != nil {
@@ -97,6 +107,7 @@ func Update(ctx context.Context, opts UpdateOptions) (*release.Release, error) {
 			CompositionNamespace: opts.Resource.GetNamespace(),
 			CompositionGVR:       gvr,
 			CompositionGVK:       opts.Resource.GetObjectKind().GroupVersionKind(),
+			KrateoNamespace:      opts.KrateoNamespace,
 		},
 	}
 

@@ -62,24 +62,31 @@ func Install(ctx context.Context, opts InstallOptions) (*release.Release, int64,
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to add compositionNamespace to values: %w", err)
 	}
-
 	dat, err = AddOrUpdateFieldInValues(dat, opts.Resource.GetName(), "global", "compositionName")
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to add compositionName to values: %w", err)
 	}
-
 	dat, err = AddOrUpdateFieldInValues(dat, opts.KrateoNamespace, "global", "krateoNamespace")
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to add krateoNamespace to values: %w", err)
 	}
-
 	dat, err = AddOrUpdateFieldInValues(dat, uid, "global", "compositionId")
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to add compositionId to values: %w", err)
 	}
+	// DEPRECATED: Remove in future versions in favor of compositionGroup and compositionInstalledVersion
 	dat, err = AddOrUpdateFieldInValues(dat, opts.Resource.GetAPIVersion(), "global", "compositionApiVersion")
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to add compositionApiVersion to values: %w", err)
+	}
+	// END DEPRECATED
+	dat, err = AddOrUpdateFieldInValues(dat, gvr.Group, "global", "compositionGroup")
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to add compositionGroup to values: %w", err)
+	}
+	dat, err = AddOrUpdateFieldInValues(dat, gvr.Version, "global", "compositionInstalledVersion")
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to add compositionInstalledVersion to values: %w", err)
 	}
 	dat, err = AddOrUpdateFieldInValues(dat, gvr.Resource, "global", "compositionResource")
 	if err != nil {
@@ -99,8 +106,21 @@ func Install(ctx context.Context, opts InstallOptions) (*release.Release, int64,
 			CompositionNamespace: opts.Resource.GetNamespace(),
 			CompositionGVR:       gvr,
 			CompositionGVK:       opts.Resource.GetObjectKind().GroupVersionKind(),
+			KrateoNamespace:      opts.KrateoNamespace,
 		},
 	}
 	rel, err := opts.HelmClient.InstallOrUpgradeChart(ctx, &chartSpec, helmOpts)
 	return rel, claimGen, err
 }
+
+/*
+compositionId: the UID of the composition resource
+compositionGroup: the group of the composition resource
+compositionInstalledVersion: the version of the composition resource. It changes when the composition version changes. (eg. an update in the chart version)
+compositionResource: the resource of the composition resource
+compositionName: the name of the composition resource
+compositionNamespace: the namespace of the composition resource
+compositionKind: the kind of the composition resource
+krateoNamespace: the namespace of the Krateo installation
+
+*/

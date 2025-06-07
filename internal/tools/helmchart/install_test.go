@@ -10,11 +10,12 @@ import (
 	"testing"
 
 	"github.com/gobuffalo/flect"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
-	"helm.sh/helm/v3/pkg/release"
-
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
@@ -87,10 +88,26 @@ func TestInstall(t *testing.T) {
 			return ctx
 		}).Assess("Install", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 
-		helmClient := newHelmClient()
+		helmClient, _ := helmclient.NewClientFromRestConf(&helmclient.RestConfClientOptions{
+			RestConfig: cfg.Client().RESTConfig(),
+			Options: &helmclient.Options{
+				Namespace: namespace,
+			},
+		})
 
 		// Create a dummy resource
 		res := createDummyResource()
+
+		ls := res.GetLabels()
+		if ls == nil {
+			ls = make(map[string]string)
+		}
+		ls[meta.ReleaseNameLabel] = "test"
+		res.SetLabels(ls)
+
+		res.SetName("12")
+
+		res.SetUID("12345678-1234-1234-1234-123456789012")
 
 		dynamicClient, err := dynamic.NewForConfig(cfg.Client().RESTConfig())
 
@@ -105,6 +122,7 @@ func TestInstall(t *testing.T) {
 				DynamicClient: dynamicClient,
 				Pluralizer:    FakePluralizer{},
 			},
+			KrateoNamespace: namespace,
 		}
 
 		// Call the Install function
@@ -114,13 +132,20 @@ func TestInstall(t *testing.T) {
 		}
 		// Check the returned release
 		expectedRelease := &release.Release{
-			Name:      "demo",
+			Name:      "test",
 			Namespace: "demo-system",
 			Version:   1,
 		}
 
+		rel, err = helmClient.GetRelease(expectedRelease.Name)
+		if err != nil {
+			t.Fatalf("failed to get release: %v", err)
+		}
+
 		if rel.Name != expectedRelease.Name || rel.Namespace != expectedRelease.Namespace || rel.Version != expectedRelease.Version {
-			t.Fatalf("expected release %v, got %v", expectedRelease, rel)
+			t.Fatalf("expected release name: %s, namespace: %s, version: %d, got name: %s, namespace: %s, version: %d",
+				expectedRelease.Name, expectedRelease.Namespace, expectedRelease.Version,
+				rel.Name, rel.Namespace, rel.Version)
 		}
 		return ctx
 	}).Feature()

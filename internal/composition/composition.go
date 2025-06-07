@@ -2,7 +2,6 @@ package composition
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,7 +33,7 @@ import (
 )
 
 var (
-	errReleaseNotFound     = errors.New("helm release not found")
+	// errReleaseNotFound     = errors.New("helm release not found")
 	errCreateIncomplete    = "cannot determine creation result - remove the " + meta.AnnotationKeyExternalCreatePending + " annotation if it is safe to proceed"
 	helmRegistryConfigPath = env.String("HELM_REGISTRY_CONFIG_PATH", helmclient.DefaultRegistryConfigPath)
 	krateoNamespace        = env.String("KRATEO_NAMESPACE", "krateo-system")
@@ -119,9 +118,8 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
-		if !errors.Is(err, errReleaseNotFound) {
-			return controller.ExternalObservation{}, err
-		}
+		log.Debug("Finding helm release", "error", err)
+		return controller.ExternalObservation{}, fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel == nil {
 		log.Debug("Composition not found.")
@@ -483,16 +481,25 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		Wait:        false,
 	}
 
+	// Check if the release exists before uninstalling
+	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	if err != nil {
+		return fmt.Errorf("finding helm release: %w", err)
+	}
+	if rel == nil {
+		log.Debug("Composition not found, nothing to uninstall.", "package", pkg.URL)
+		h.eventRecorder.Eventf(mg, eventTypeNormal, reasonDeleted, "Composition not found, nothing to uninstall: %s", mg.GetName())
+		return nil
+	}
+
 	err = hc.UninstallRelease(&chartSpec)
 	if err != nil {
 		log.Debug("Uninstalling helm chart", "error", err)
 	}
 
-	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err = helmchart.FindRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
-		if !errors.Is(err, errReleaseNotFound) {
-			return err
-		}
+		return fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel != nil {
 		log.Debug("Composition not deleted.")

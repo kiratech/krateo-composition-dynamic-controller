@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/kube"
 
 	helmstorage "helm.sh/helm/v3/pkg/storage"
 
@@ -115,6 +116,44 @@ func connect(logger *zerolog.Logger, cr *unstructured.Unstructured) (helmclient.
 	}
 
 	return helmclient.New(opts)
+}
+
+func newHelmClientWithClient(client kube.Interface) helmclient.Client {
+	settings := cli.New()
+	// storage := repo.File{}
+
+	actionConfig := &action.Configuration{
+		Releases:     helmstorage.Init(driver.NewMemory()),
+		KubeClient:   &kubefake.FailingKubeClient{PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard}},
+		Capabilities: chartutil.DefaultCapabilities,
+		Log: func(format string, v ...interface{}) {
+			// t.Helper()
+			// if true {
+			// 	t.Logf(format, v...)
+			// }
+		},
+	}
+
+	registryClient, err := registry.NewClient(
+		registry.ClientOptDebug(settings.Debug),
+		registry.ClientOptCredentialsFile(settings.RegistryConfig),
+	)
+	if err != nil {
+		// t.Fatal(err)
+		return nil
+	}
+	actionConfig.RegistryClient = registryClient
+
+	return &helmclient.HelmClient{
+		Settings:  settings,
+		Providers: getter.All(settings),
+		// storage:      &storage,
+		ActionConfig: actionConfig,
+		// linting:      options.Linting,
+		DebugLog: actionConfig.Log,
+		// output:       options.Output,
+		// RegistryAuth: options.RegistryAuth,
+	}
 }
 
 func newHelmClient() helmclient.Client {
