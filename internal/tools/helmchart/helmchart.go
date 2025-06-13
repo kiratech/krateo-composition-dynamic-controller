@@ -13,6 +13,7 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 
+	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -234,4 +235,33 @@ func FindRelease(hc helmclient.Client, name string) (*release.Release, error) {
 	}
 
 	return res, nil
+}
+
+func FindAllReleases(hc helmclient.Client) ([]*release.Release, error) {
+	all, err := hc.ListReleasesByStateMask(action.ListAll)
+	if err != nil {
+		return nil, err
+	}
+
+	res := make([]*release.Release, 0, len(all))
+	for _, el := range all {
+		res = append(res, el)
+	}
+
+	return res, nil
+}
+
+func FindAnyRelease(hc helmclient.Client, name string) (*release.Release, error) {
+	all, err := FindAllReleases(hc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list releases: %w", err)
+	}
+
+	for _, el := range all {
+		if name == el.Name {
+			return el, nil
+		}
+	}
+
+	return nil, nil
 }

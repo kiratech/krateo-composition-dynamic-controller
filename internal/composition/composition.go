@@ -482,7 +482,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Check if the release exists before uninstalling
-	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err := helmchart.FindAnyRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
@@ -497,7 +497,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		log.Debug("Uninstalling helm chart", "error", err)
 	}
 
-	rel, err = helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err = helmchart.FindAnyRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
