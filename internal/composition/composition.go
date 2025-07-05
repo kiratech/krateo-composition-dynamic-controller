@@ -33,7 +33,6 @@ import (
 )
 
 var (
-	// errReleaseNotFound     = errors.New("helm release not found")
 	errCreateIncomplete    = "cannot determine creation result - remove the " + meta.AnnotationKeyExternalCreatePending + " annotation if it is safe to proceed"
 	helmRegistryConfigPath = env.String("HELM_REGISTRY_CONFIG_PATH", helmclient.DefaultRegistryConfigPath)
 	krateoNamespace        = env.String("KRATEO_NAMESPACE", "krateo-system")
@@ -563,11 +562,6 @@ func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryA
 }
 
 func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth, transportWrapper func(http.RoundTripper) http.RoundTripper) (helmclient.Client, error) {
-	// log := h.logger.WithValues("apiVersion", mg.GetAPIVersion()).
-	// 	WithValues("kind", mg.GetKind()).
-	// 	WithValues("name", mg.GetName()).
-	// 	WithValues("namespace", mg.GetNamespace())
-
 	opts := &helmclient.Options{
 		Namespace:        mg.GetNamespace(),
 		RepositoryCache:  "/tmp/.helmcache",
@@ -575,10 +569,8 @@ func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Uns
 		RegistryConfig:   helmRegistryConfigFile,
 		Debug:            true,
 		Linting:          false,
-		DebugLog: func(format string, v ...interface{}) {
-			return
-		},
-		RegistryAuth: (registryAuth),
+		DebugLog:         func(format string, v ...interface{}) {},
+		RegistryAuth:     registryAuth,
 	}
 
 	h.kubeconfig.WrapTransport = transportWrapper

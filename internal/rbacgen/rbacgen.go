@@ -3,6 +3,8 @@ package rbacgen
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/utils/ptr"
 
@@ -46,10 +48,16 @@ func (r *RBACGen) Generate(compositionDefinitionUID, compositionDefinitionNamesp
 		ClusterRole:        rbac.InitClusterRole(r.baseName),
 		ClusterRoleBinding: rbac.InitClusterRoleBinding(r.baseName, r.baseName, r.saName, r.saNamespace),
 		Namespaced:         map[string]rbac.Namespaced{},
+		Namespaces:         []*corev1.Namespace{},
 	}
 
 	for _, resource := range resources {
 		if resource.Namespace == "" {
+			if resource.Group == "" && resource.Resource == "namespaces" && resource.Version == "v1" {
+				// If the resource is a namespace, we need to create a namespace object
+				policy.Namespaces = append(policy.Namespaces, rbac.CreateNamespace(resource.Name, r.baseName, compositionNamespace))
+			}
+
 			policy.ClusterRole.Rules = append(policy.ClusterRole.Rules, rbacv1.PolicyRule{
 				APIGroups: []string{resource.Group},
 				Resources: []string{resource.Resource},

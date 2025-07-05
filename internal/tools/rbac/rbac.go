@@ -1,6 +1,8 @@
 package rbac
 
 import (
+	corev1 "k8s.io/api/core/v1"
+
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -11,9 +13,26 @@ type Namespaced struct {
 }
 
 type RBAC struct {
+	Namespaces         []*corev1.Namespace
 	Namespaced         map[string]Namespaced
 	ClusterRole        *rbacv1.ClusterRole
 	ClusterRoleBinding *rbacv1.ClusterRoleBinding
+}
+
+func CreateNamespace(name string, releaseName string, releaseNamespace string) *corev1.Namespace {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "Helm", // We need to add this label to avoid issues with Helm
+			},
+			Annotations: map[string]string{
+				"meta.helm.sh/release-name":      releaseName,
+				"meta.helm.sh/release-namespace": releaseNamespace,
+			},
+		},
+	}
+
 }
 
 func InitRole(name string, namespace string) *rbacv1.Role {

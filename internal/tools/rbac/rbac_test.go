@@ -81,3 +81,28 @@ func TestInitClusterRoleBinding(t *testing.T) {
 		t.Errorf("expected subject to be ServiceAccount %s in namespace %s, got %s %s in namespace %s", saName, saNamespace, subject.Kind, subject.Name, subject.Namespace)
 	}
 }
+func TestCreateNamespace(t *testing.T) {
+	name := "test-namespace"
+	releaseName := "test-release"
+	releaseNamespace := "test-namespace"
+	namespace := CreateNamespace(name, releaseName, releaseNamespace)
+
+	if namespace.ObjectMeta.Name != name {
+		t.Errorf("expected namespace name %s, got %s", name, namespace.ObjectMeta.Name)
+	}
+
+	expectedLabel := "Helm"
+	if namespace.ObjectMeta.Labels["app.kubernetes.io/managed-by"] != expectedLabel {
+		t.Errorf("expected label app.kubernetes.io/managed-by to be %s, got %s", expectedLabel, namespace.ObjectMeta.Labels["app.kubernetes.io/managed-by"])
+	}
+	if namespace.ObjectMeta.Annotations["meta.helm.sh/release-name"] != releaseName {
+		t.Errorf("expected annotation meta.helm.sh/release-name to be %s, got %s", releaseName, namespace.ObjectMeta.Annotations["meta.helm.sh/release-name"])
+	}
+	if namespace.ObjectMeta.Annotations["meta.helm.sh/release-namespace"] != releaseNamespace {
+		t.Errorf("expected annotation meta.helm.sh/release-namespace to be %s, got %s", releaseNamespace, namespace.ObjectMeta.Annotations["meta.helm.sh/release-namespace"])
+	}
+
+	if len(namespace.ObjectMeta.Labels) != 1 {
+		t.Errorf("expected 1 label, got %d labels", len(namespace.ObjectMeta.Labels))
+	}
+}

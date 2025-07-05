@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/krateoplatformops/plumbing/e2e"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -408,6 +409,13 @@ func TestApplyRBAC(t *testing.T) {
 					{
 						Kind: "User",
 						Name: "test-user",
+					},
+				},
+			},
+			Namespaces: []*corev1.Namespace{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test",
 					},
 				},
 			},
@@ -908,6 +916,119 @@ func TestUninstallRBAC(t *testing.T) {
 		err = installer.UninstallRBAC(rbac)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
+		}
+
+		return ctx
+	}).Feature()
+
+	testenv.Test(t, f)
+}
+func TestApplyNamespace(t *testing.T) {
+	f := features.New("ApplyNamespace").
+		Setup(e2e.Logger("test")).
+		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return ctx
+		}).Assess("Create new namespace", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		dyn := dynamic.NewForConfigOrDie(cfg.Client().RESTConfig())
+
+		installer := &RBACInstaller{DynamicClient: dyn}
+
+		namespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-namespace",
+			},
+		}
+
+		result, err := installer.ApplyNamespace(context.Background(), namespace)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if result.Name != namespace.Name {
+			t.Errorf("expected namespace name %s, got %s", namespace.Name, result.Name)
+		}
+
+		return ctx
+	}).Feature()
+
+	testenv.Test(t, f)
+}
+
+func TestApplyNamespace_UpdateExisting(t *testing.T) {
+	f := features.New("ApplyNamespace_UpdateExisting").
+		Setup(e2e.Logger("test")).
+		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return ctx
+		}).Assess("Update existing namespace", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		dyn := dynamic.NewForConfigOrDie(cfg.Client().RESTConfig())
+
+		installer := &RBACInstaller{DynamicClient: dyn}
+
+		// Create initial namespace
+		initialNamespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-namespace-update",
+				Labels: map[string]string{
+					"initial": "true",
+				},
+			},
+		}
+
+		_, err := installer.ApplyNamespace(context.Background(), initialNamespace)
+		if err != nil {
+			t.Fatalf("expected no error creating initial namespace, got %v", err)
+		}
+
+		// Update the namespace with new labels
+		updatedNamespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-namespace-update",
+				Labels: map[string]string{
+					"updated": "true",
+				},
+			},
+		}
+
+		result, err := installer.ApplyNamespace(context.Background(), updatedNamespace)
+		if err != nil {
+			t.Fatalf("expected no error updating namespace, got %v", err)
+		}
+
+		if result.Name != updatedNamespace.Name {
+			t.Errorf("expected namespace name %s, got %s", updatedNamespace.Name, result.Name)
+		}
+
+		// Verify the labels were updated
+		if result.Labels["updated"] != "true" {
+			t.Errorf("expected updated label to be 'true', got %s", result.Labels["updated"])
+		}
+
+		return ctx
+	}).Feature()
+
+	testenv.Test(t, f)
+}
+
+func TestApplyNamespace_InvalidName(t *testing.T) {
+	f := features.New("ApplyNamespace_InvalidName").
+		Setup(e2e.Logger("test")).
+		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return ctx
+		}).Assess("Handle invalid namespace name", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		dyn := dynamic.NewForConfigOrDie(cfg.Client().RESTConfig())
+
+		installer := &RBACInstaller{DynamicClient: dyn}
+
+		// Create namespace with invalid name (uppercase not allowed)
+		namespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "INVALID-NAMESPACE-NAME",
+			},
+		}
+
+		_, err := installer.ApplyNamespace(context.Background(), namespace)
+		if err == nil {
+			t.Fatalf("expected error for invalid namespace name, got none")
 		}
 
 		return ctx

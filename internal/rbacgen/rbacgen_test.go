@@ -8,6 +8,7 @@ import (
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/rbac"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 )
 
@@ -35,6 +36,7 @@ func TestRBACGen_Generate(t *testing.T) {
 			{Group: "group2", Resource: "resource2", Name: "name2", Namespace: "namespace1"},
 			{Group: "", Resource: "resource3", Name: "name3"},
 			{Group: "", Resource: "resource4", Name: "name4", Namespace: "namespace1"},
+			{Group: "", Resource: "namespaces", Version: "v1", Name: "namespace1"},
 		}
 		mockInspector.On("Resources", "compDefUID", "compDefNS", "compUID", "compNS").Return(mockResources, nil)
 
@@ -47,7 +49,11 @@ func TestRBACGen_Generate(t *testing.T) {
 					RoleBinding: rbac.InitRoleBinding("test-base", "test-base", "namespace1", "test-sa", "test-namespace"),
 				},
 			},
+			Namespaces: []*corev1.Namespace{},
 		}
+
+		expectedPolicy.Namespaces = append(expectedPolicy.Namespaces, rbac.CreateNamespace("namespace1", "test-base", "compNS"))
+
 		expectedPolicy.ClusterRole.Rules = append(expectedPolicy.ClusterRole.Rules, rbacv1.PolicyRule{
 			APIGroups: []string{"group1"},
 			Resources: []string{"resource1"},
@@ -66,6 +72,14 @@ func TestRBACGen_Generate(t *testing.T) {
 			Verbs:     []string{"*"},
 			// ResourceNames: []string{"name3"},
 		})
+
+		expectedPolicy.ClusterRole.Rules = append(expectedPolicy.ClusterRole.Rules, rbacv1.PolicyRule{
+			APIGroups: []string{""},
+			Resources: []string{"namespaces"},
+			Verbs:     []string{"*"},
+			// ResourceNames: []string{"namespace1"},
+		})
+
 		expectedPolicy.Namespaced["namespace1"].Role.Rules = append(expectedPolicy.Namespaced["namespace1"].Role.Rules, rbacv1.PolicyRule{
 			APIGroups: []string{""},
 			Resources: []string{"resource4"},

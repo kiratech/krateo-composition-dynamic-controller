@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,6 +24,21 @@ func NewRBACInstaller(cli dynamic.Interface) *RBACInstaller {
 }
 
 func (i *RBACInstaller) ApplyRBAC(rbac *RBAC) error {
+	if rbac == nil {
+		return fmt.Errorf("RBAC cannot be nil")
+	}
+
+	if rbac.Namespaces != nil {
+		for _, ns := range rbac.Namespaces {
+			if ns != nil {
+				_, err := i.ApplyNamespace(context.Background(), ns)
+				if err != nil {
+					return fmt.Errorf("failed to Apply Namespace %s: %w", ns.Name, err)
+				}
+			}
+		}
+	}
+
 	if rbac.ClusterRole != nil {
 		_, err := i.ApplyClusterRole(context.Background(), rbac.ClusterRole)
 		if err != nil {
@@ -51,6 +67,45 @@ func (i *RBACInstaller) ApplyRBAC(rbac *RBAC) error {
 	}
 	return nil
 
+}
+
+func (r *RBACInstaller) ApplyNamespace(ctx context.Context, namespace *corev1.Namespace) (*corev1.Namespace, error) {
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert Namespace to unstructured: %w", err)
+	}
+	u := &unstructured.Unstructured{Object: m}
+	cli := r.DynamicClient.Resource(
+		schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "namespaces",
+		},
+	)
+
+	if _, err := cli.Get(ctx, namespace.Name, metav1.GetOptions{}); errors.IsNotFound(err) {
+		res, err := cli.Create(ctx, u, metav1.CreateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to Create Namespace: %w", err)
+		}
+		namespace = &corev1.Namespace{}
+		err = runtime.DefaultUnstructuredConverter.FromUnstructured(res.Object, namespace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert unstructured to Namespace: %w", err)
+		}
+		return namespace, nil
+	}
+
+	res, err := cli.Update(ctx, u, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to Update Namespace: %w", err)
+	}
+	namespace = &corev1.Namespace{}
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(res.Object, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to Namespace: %w", err)
+	}
+	return namespace, nil
 }
 
 func (i *RBACInstaller) ApplyRole(ctx context.Context, role *rbacv1.Role) (*rbacv1.Role, error) {
@@ -229,6 +284,11 @@ func (i *RBACInstaller) ApplyClusterRoleBinding(ctx context.Context, clusterRole
 }
 
 func (i *RBACInstaller) UninstallRBAC(rbac *RBAC) error {
+	if rbac == nil {
+		return fmt.Errorf("RBAC cannot be nil")
+	}
+	// in this case it will not delete the namespaces, only the roles and bindings because Helm should delete the namespaces itself
+
 	if rbac.ClusterRole != nil {
 		err := i.DeleteClusterRole(context.Background(), rbac.ClusterRole.Name)
 		if err != nil {
