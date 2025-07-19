@@ -4,19 +4,26 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
+
+	"github.com/go-logr/logr"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/composition"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/plumbing/env"
+	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
+	"github.com/krateoplatformops/plumbing/ptr"
+	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
 	genctrl "github.com/krateoplatformops/unstructured-runtime"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
@@ -28,8 +35,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 const (
@@ -63,9 +68,11 @@ func main() {
 	saNamespace := flag.String("saNamespace",
 		env.String("COMPOSITION_CONTROLLER_SA_NAMESPACE", ""), "service account namespace")
 	maxErrorRetryInterval := flag.Duration("max-error-retry-interval",
-		env.Duration("COMPOSITION_MAX_ERROR_RETRY_INTERVAL", 60*time.Second), "The maximum interval between retries when an error occurs. This should be less than the half of the poll interval.")
+		env.Duration("COMPOSITION_CONTROLLER_MAX_ERROR_RETRY_INTERVAL", 60*time.Second), "The maximum interval between retries when an error occurs. This should be less than the half of the poll interval.")
 	minErrorRetryInterval := flag.Duration("min-error-retry-interval",
-		env.Duration("COMPOSITION_MIN_ERROR_RETRY_INTERVAL", 1*time.Second), "The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval.")
+		env.Duration("COMPOSITION_CONTROLLER_MIN_ERROR_RETRY_INTERVAL", 1*time.Second), "The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval.")
+	metricsServerPort := flag.Int("metrics-server-port",
+		env.Int("COMPOSITION_CONTROLLER_METRICS_SERVER_PORT", 0), "The address to bind the metrics server to. If empty, metrics server is disabled.")
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
@@ -74,8 +81,21 @@ func main() {
 
 	flag.Parse()
 
-	zl := zap.New(zap.UseDevMode(*debug))
-	log := logging.NewLogrLogger(zl.WithName(serviceName))
+	logLevel := slog.LevelInfo
+	if *debug {
+		logLevel = slog.LevelDebug
+	}
+
+	lh := prettylog.New(&slog.HandlerOptions{
+		Level:     logLevel,
+		AddSource: false,
+	},
+		prettylog.WithDestinationWriter(os.Stderr),
+		prettylog.WithColor(),
+		prettylog.WithOutputEmptyAttrs(),
+	)
+
+	log := logging.NewLogrLogger(logr.FromSlogHandler(slog.New(lh).Handler()))
 	// Kubernetes configuration
 	var cfg *rest.Config
 	var err error
@@ -87,6 +107,16 @@ func main() {
 	if err != nil {
 		log.Debug("Building kubeconfig.", "error", err)
 	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), []os.Signal{
+		os.Interrupt,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGKILL,
+		syscall.SIGHUP,
+		syscall.SIGQUIT,
+	}...)
+	defer cancel()
 
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
@@ -100,7 +130,7 @@ func main() {
 
 	cachedDisc := memory.NewMemCacheClient(discovery)
 
-	rec, err := eventrecorder.Create(cfg)
+	rec, err := eventrecorder.Create(ctx, cfg, "composition-dynamic-controller", nil)
 	if err != nil {
 		log.Debug("Creating event recorder.", "error", err)
 	}
@@ -110,7 +140,7 @@ func main() {
 	if len(*chart) > 0 {
 		pig = archive.Static(*chart)
 	} else {
-		pig, err = archive.Dynamic(cfg, log, pluralizer)
+		pig, err = archive.Dynamic(cfg, pluralizer)
 		if err != nil {
 			log.Debug("Creating chart url info getter.", "error", err)
 		}
@@ -132,9 +162,18 @@ func main() {
 
 	chartInspector := chartinspector.NewChartInspector(*urlChartInspector)
 	rbacgen := rbacgen.NewRBACGen(*saName, *saNamespace, &chartInspector)
-	handler := composition.NewHandler(cfg, log, pig, rec, dyn, cachedDisc, *pluralizer, rbacgen)
+	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), dyn, cachedDisc, *pluralizer, rbacgen)
 
-	controller := genctrl.New(genctrl.Options{
+	metricsServerBindAddress := ""
+	if ptr.Deref(metricsServerPort, 0) != 0 {
+		log.Info("Metrics server enabled", "bindAddress", fmt.Sprintf(":%d", *metricsServerPort))
+		metricsServerBindAddress = fmt.Sprintf(":%d", *metricsServerPort)
+	} else {
+		log.Info("Metrics server disabled")
+		metricsServerBindAddress = "0"
+	}
+
+	controller := genctrl.New(ctx, genctrl.Options{
 		Discovery:      cachedDisc,
 		Client:         dyn,
 		ResyncInterval: *resyncInterval,
@@ -153,18 +192,11 @@ func main() {
 		},
 		Pluralizer:        *pluralizer,
 		GlobalRateLimiter: workqueue.NewExponentialTimedFailureRateLimiter[any](*minErrorRetryInterval, *maxErrorRetryInterval),
+		Metrics: metricsserver.Options{
+			BindAddress: metricsServerBindAddress,
+		},
 	})
 	controller.SetExternalClient(handler)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), []os.Signal{
-		os.Interrupt,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGKILL,
-		syscall.SIGHUP,
-		syscall.SIGQUIT,
-	}...)
-	defer cancel()
 
 	err = controller.Run(ctx, *workers)
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	apis "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -244,7 +243,7 @@ func TestGetter(t *testing.T) {
 			}
 			pluralizer := FakePluralizer{}
 
-			gt, err := archive.Dynamic(c.Client().RESTConfig(), logging.NewNopLogger(), pluralizer)
+			gt, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
 			if err != nil {
 				t.Fatal(err)
 				return ctx

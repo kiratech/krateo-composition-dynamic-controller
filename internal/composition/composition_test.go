@@ -6,6 +6,7 @@ package composition
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,12 +23,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/go-logr/logr"
 	"github.com/gobuffalo/flect"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
+	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
@@ -40,7 +44,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/e2e-framework/klient/decoder"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
@@ -149,13 +152,21 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			zl := zap.New(zap.UseDevMode(true))
-			log := logging.NewLogrLogger(zl.WithName("composition-controller-test"))
+			lh := prettylog.New(&slog.HandlerOptions{
+				Level:     slog.LevelDebug,
+				AddSource: false,
+			},
+				prettylog.WithDestinationWriter(os.Stderr),
+				prettylog.WithColor(),
+				prettylog.WithOutputEmptyAttrs(),
+			)
+
+			log := logging.NewLogrLogger(logr.FromSlogHandler(slog.New(lh).Handler()))
 
 			var pig archive.Getter
 			pluralizer := FakePluralizer{}
 
-			pig, err = archive.Dynamic(cfg.Client().RESTConfig(), log, pluralizer)
+			pig, err = archive.Dynamic(cfg.Client().RESTConfig(), pluralizer)
 			if err != nil {
 				t.Error("Creating chart url info getter.", "error", err)
 				return ctx
@@ -175,7 +186,7 @@ func TestController(t *testing.T) {
 
 			cachedDisc := memory.NewMemCacheClient(discovery)
 
-			rec, err := eventrecorder.Create(cfg.Client().RESTConfig())
+			rec, err := eventrecorder.Create(ctx, cfg.Client().RESTConfig(), "test", nil)
 			if err != nil {
 				t.Error("Creating event recorder.", "error", err)
 				return ctx
@@ -183,7 +194,7 @@ func TestController(t *testing.T) {
 
 			chartInspector := chartinspector.NewChartInspector(chartInspectorUrl)
 			rbacgen := rbacgen.NewRBACGen("test-sa", altNamespace, &chartInspector)
-			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, rec, dyn, cachedDisc, pluralizer, rbacgen)
+			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), dyn, cachedDisc, pluralizer, rbacgen)
 
 			resli, err := decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml")
 			if err != nil {

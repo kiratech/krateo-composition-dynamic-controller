@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient/tracer"
@@ -15,6 +14,7 @@ import (
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/rbac"
 	"github.com/krateoplatformops/plumbing/env"
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
@@ -26,14 +26,12 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/record"
 
-	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 )
 
 var (
-	errCreateIncomplete    = "cannot determine creation result - remove the " + meta.AnnotationKeyExternalCreatePending + " annotation if it is safe to proceed"
+	// errCreateIncomplete    = "cannot determine creation result - remove the " + meta.AnnotationKeyExternalCreatePending + " annotation if it is safe to proceed"
 	helmRegistryConfigPath = env.String("HELM_REGISTRY_CONFIG_PATH", helmclient.DefaultRegistryConfigPath)
 	krateoNamespace        = env.String("KRATEO_NAMESPACE", "krateo-system")
 	helmRegistryConfigFile = filepath.Join(helmRegistryConfigPath, registry.CredentialsFileBasename)
@@ -59,7 +57,7 @@ const (
 
 var _ controller.ExternalClient = (*handler)(nil)
 
-func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event record.EventRecorder, dyn dynamic.Interface, disc discovery.CachedDiscoveryInterface, pluralizer pluralizer.PluralizerInterface, rbacgen rbacgen.RBACGenInterface) controller.ExternalClient {
+func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event event.APIRecorder, dyn dynamic.Interface, disc discovery.CachedDiscoveryInterface, pluralizer pluralizer.PluralizerInterface, rbacgen rbacgen.RBACGenInterface) controller.ExternalClient {
 	val, ok := os.LookupEnv(helmRegistryConfigPathEnvVar)
 	if ok {
 		helmRegistryConfigPath = val
@@ -87,7 +85,7 @@ type handler struct {
 	dynamicClient     dynamic.Interface
 	discoveryClient   discovery.CachedDiscoveryInterface
 	packageInfoGetter archive.Getter
-	eventRecorder     record.EventRecorder
+	eventRecorder     event.APIRecorder
 }
 
 func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (controller.ExternalObservation, error) {
@@ -103,7 +101,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	pkg, err := h.packageInfoGetter.Get(mg)
+	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
 		log.Debug("Getting package info", "error", err)
 		return controller.ExternalObservation{}, err
@@ -126,19 +124,6 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			ResourceExists:   false,
 			ResourceUpToDate: false,
 		}, nil
-	}
-
-	if meta.ExternalCreateIncomplete(mg) {
-		meta.RemoveAnnotations(mg, meta.AnnotationKeyExternalCreatePending)
-		meta.SetExternalCreateSucceeded(mg, time.Now())
-		mg, err = tools.Update(ctx, mg, tools.UpdateOptions{
-			Pluralizer:    h.pluralizer,
-			DynamicClient: h.dynamicClient,
-		})
-		if err != nil {
-			log.Debug("Setting meta create succeeded annotation.", "error", err)
-			return controller.ExternalObservation{}, err
-		}
 	}
 
 	// Get Resources and generate RBAC
@@ -239,31 +224,8 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		WithValues("name", mg.GetName()).
 		WithValues("namespace", mg.GetNamespace())
 
-	meta.RemoveAnnotations(mg, meta.AnnotationKeyExternalCreatePending)
-	mg, err := tools.Update(ctx, mg, tools.UpdateOptions{
-		Pluralizer:    h.pluralizer,
-		DynamicClient: h.dynamicClient,
-	})
-	if err != nil {
-		log.Debug("Removing Create pending annotation", "error", err)
-		return err
-	}
-
-	if meta.ExternalCreateIncomplete(mg) {
-		log.Debug(errCreateIncomplete)
-		err := unstructuredtools.SetConditions(mg, condition.Creating())
-		if err != nil {
-			return err
-		}
-		_, err = tools.UpdateStatus(ctx, mg, tools.UpdateOptions{
-			Pluralizer:    h.pluralizer,
-			DynamicClient: h.dynamicClient,
-		})
-		return err
-	}
-
 	meta.SetReleaseName(mg, mg.GetName())
-	mg, err = tools.Update(ctx, mg, tools.UpdateOptions{
+	mg, err := tools.Update(ctx, mg, tools.UpdateOptions{
 		Pluralizer:    h.pluralizer,
 		DynamicClient: h.dynamicClient,
 	})
@@ -276,7 +238,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	pkg, err := h.packageInfoGetter.Get(mg)
+	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
 		log.Debug("Getting package info", "error", err)
 		return err
@@ -327,27 +289,9 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	rel, _, err := helmchart.Install(ctx, opts)
 	if err != nil {
 		log.Debug("Installing helm chart", "package", pkg.URL, "error", err)
-		meta.SetExternalCreateFailed(mg, time.Now())
-
-		tools.Update(ctx, mg, tools.UpdateOptions{
-			Pluralizer:    h.pluralizer,
-			DynamicClient: h.dynamicClient,
-		})
-
 		return fmt.Errorf("installing helm chart: %w", err)
 	}
 	log.Debug("Installing composition package", "package", pkg.URL)
-
-	meta.SetExternalCreatePending(mg, time.Now())
-
-	mg, err = tools.Update(ctx, mg, tools.UpdateOptions{
-		Pluralizer:    h.pluralizer,
-		DynamicClient: h.dynamicClient,
-	})
-	if err != nil {
-		log.Debug("Setting meta create pending annotation.", "error", err)
-		return err
-	}
 
 	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
 	if err != nil {
@@ -363,7 +307,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	setManagedResources(mg, managed)
 	h.logger.Debug("Composition created.", "package", pkg.URL)
 
-	h.eventRecorder.Eventf(mg, eventTypeNormal, reasonCreated, "Created composition: %s", mg.GetName())
+	h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Composition created: %s", mg.GetName())))
 	err = setAvaibleStatus(mg, pkg, "Composition created")
 	if err != nil {
 		log.Debug("Setting available status", "error", err)
@@ -385,25 +329,11 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	log.Debug("Handling composition values update.")
 
-	// If we started but never completed creation of an external resource we
-	// may have lost critical information.The safest thing to
-	// do is to refuse to proceed.
-	if meta.ExternalCreateIncomplete(mg) {
-		log.Debug(errCreateIncomplete)
-		_ = unstructuredtools.SetConditions(mg, condition.Creating())
-
-		_, err := tools.UpdateStatus(ctx, mg, tools.UpdateOptions{
-			Pluralizer:    h.pluralizer,
-			DynamicClient: h.dynamicClient,
-		})
-		return err
-	}
-
 	if h.packageInfoGetter == nil {
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	pkg, err := h.packageInfoGetter.Get(mg)
+	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
 		log.Debug("Getting package info", "error", err)
 		return err
@@ -436,7 +366,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	log.Debug("Composition values updated.", "package", pkg.URL)
 
-	h.eventRecorder.Eventf(mg, eventTypeNormal, reasonUpdated, "Updated composition: %s", mg.GetName())
+	h.eventRecorder.Event(mg, event.Normal(reasonUpdated, "Update", fmt.Sprintf("Updated composition: %s", mg.GetName())))
 	err = setAvaibleStatus(mg, pkg, "Composition values updated.")
 	if err != nil {
 		log.Debug("Setting available status", "error", err)
@@ -466,7 +396,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
-	pkg, err := h.packageInfoGetter.Get(mg)
+	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
 		log.Debug("Getting package info", "error", err)
 		return err
@@ -487,7 +417,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	if rel == nil {
 		log.Debug("Composition not found, nothing to uninstall.", "package", pkg.URL)
-		h.eventRecorder.Eventf(mg, eventTypeNormal, reasonDeleted, "Composition not found, nothing to uninstall: %s", mg.GetName())
+		h.eventRecorder.Event(mg, event.Normal(reasonDeleted, "Delete", fmt.Sprintf("Composition not found, nothing to uninstall: %s", mg.GetName())))
 		return nil
 	}
 
@@ -522,7 +452,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
-	h.eventRecorder.Eventf(mg, eventTypeNormal, reasonDeleted, "Deleted composition: %s", mg.GetName())
+	h.eventRecorder.Event(mg, event.Normal(reasonDeleted, "Delete", fmt.Sprintf("Deleted composition: %s", mg.GetName())))
 	log.Debug("Composition package removed.", "package", pkg.URL)
 
 	return nil
