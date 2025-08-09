@@ -16,8 +16,21 @@ type Resource struct {
 	Namespace string `json:"namespace"`
 }
 
+type Parameters struct {
+	CompositionName                string `json:"compositionName"`                // The name of the composition. Required.
+	CompositionNamespace           string `json:"compositionNamespace"`           // The namespace of the composition. Required.
+	CompositionGroup               string `json:"compositionGroup"`               // The group of the composition. Optional, defaults to "composition.krateo.io"
+	CompositionVersion             string `json:"compositionVersion"`             // The version of the composition. Required.
+	CompositionResource            string `json:"compositionResource"`            // The resource name of the composition. Required.
+	CompositionDefinitionName      string `json:"compositionDefinitionName"`      // The name of the composition definition. Required.
+	CompositionDefinitionNamespace string `json:"compositionDefinitionNamespace"` // The namespace of the composition definition. Required.
+	CompositionDefinitionGroup     string `json:"compositionDefinitionGroup"`     // The group of the composition definition. Optional, defaults to "core.krateo.io"
+	CompositionDefinitionVersion   string `json:"compositionDefinitionVersion"`   // The version of the composition definition. Optional, defaults to "v1alpha1"
+	CompositionDefinitionResource  string `json:"compositionDefinitionResource"`  // The resource name of the composition definition. Optional, defaults to "compositiondefinitions"
+}
+
 type ChartInspectorInterface interface {
-	Resources(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace string) ([]Resource, error)
+	Resources(Parameters) ([]Resource, error)
 }
 
 type ChartInspector struct {
@@ -39,7 +52,32 @@ func (c *ChartInspector) WithServer(server string) {
 	c.server = server
 }
 
-func (c *ChartInspector) Resources(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace string) ([]Resource, error) {
+func (c *ChartInspector) Validate(params Parameters) error {
+	if params.CompositionName == "" {
+		return fmt.Errorf("compositionName is required")
+	}
+	if params.CompositionNamespace == "" {
+		return fmt.Errorf("compositionNamespace is required")
+	}
+	if params.CompositionVersion == "" {
+		return fmt.Errorf("compositionVersion is required")
+	}
+	if params.CompositionResource == "" {
+		return fmt.Errorf("compositionResource is required")
+	}
+	if params.CompositionDefinitionName == "" {
+		return fmt.Errorf("compositionDefinitionName is required")
+	}
+	if params.CompositionDefinitionNamespace == "" {
+		return fmt.Errorf("compositionDefinitionNamespace is required")
+	}
+	return nil
+}
+
+func (c *ChartInspector) Resources(params Parameters) ([]Resource, error) {
+	if err := c.Validate(params); err != nil {
+		return nil, fmt.Errorf("validating parameters: %w", err)
+	}
 	u, err := url.JoinPath(c.server, "/resources")
 	if err != nil {
 		return nil, fmt.Errorf("joining server url: %w", err)
@@ -49,10 +87,17 @@ func (c *ChartInspector) Resources(compositionDefinitionUID, compositionDefiniti
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	query := req.URL.Query()
-	query.Add("compositionDefinitionUID", compositionDefinitionUID)
-	query.Add("compositionDefinitionNamespace", compositionDefinitionNamespace)
-	query.Add("compositionUID", compositionUID)
-	query.Add("compositionNamespace", compositionNamespace)
+	setQueryIfNotEmpty(&query, "compositionName", params.CompositionName)
+	setQueryIfNotEmpty(&query, "compositionNamespace", params.CompositionNamespace)
+	setQueryIfNotEmpty(&query, "compositionDefinitionName", params.CompositionDefinitionName)
+	setQueryIfNotEmpty(&query, "compositionDefinitionNamespace", params.CompositionDefinitionNamespace)
+	setQueryIfNotEmpty(&query, "compositionDefinitionGroup", params.CompositionDefinitionGroup)
+	setQueryIfNotEmpty(&query, "compositionDefinitionVersion", params.CompositionDefinitionVersion)
+	setQueryIfNotEmpty(&query, "compositionDefinitionResource", params.CompositionDefinitionResource)
+	setQueryIfNotEmpty(&query, "compositionGroup", params.CompositionGroup)
+	setQueryIfNotEmpty(&query, "compositionVersion", params.CompositionVersion)
+	setQueryIfNotEmpty(&query, "compositionResource", params.CompositionResource)
+
 	req.URL.RawQuery = query.Encode()
 
 	resp, err := c.httpClient.Do(req)
@@ -81,4 +126,10 @@ func (c *ChartInspector) Resources(compositionDefinitionUID, compositionDefiniti
 	}
 
 	return resources, nil
+}
+
+func setQueryIfNotEmpty(query *url.Values, key, value string) {
+	if value != "" {
+		query.Set(key, value)
+	}
 }

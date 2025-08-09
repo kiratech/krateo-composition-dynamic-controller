@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
+
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient/tracer"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
@@ -31,14 +33,14 @@ import (
 )
 
 var (
-	// errCreateIncomplete    = "cannot determine creation result - remove the " + meta.AnnotationKeyExternalCreatePending + " annotation if it is safe to proceed"
-	helmRegistryConfigPath = env.String("HELM_REGISTRY_CONFIG_PATH", helmclient.DefaultRegistryConfigPath)
-	krateoNamespace        = env.String("KRATEO_NAMESPACE", "krateo-system")
+	helmRegistryConfigPath = env.String(helmRegistryConfigPathEnvVar, helmclient.DefaultRegistryConfigPath)
+	krateoNamespace        = env.String(krateoNamespaceEnvVar, krateoNamespaceDefault)
 	helmRegistryConfigFile = filepath.Join(helmRegistryConfigPath, registry.CredentialsFileBasename)
 	helmMaxHistory         = env.Int(helmMaxHistoryEnvvar, 10)
 )
 
 const (
+	// Event reasons
 	reasonCreated   = "CompositionCreated"
 	reasonDeleted   = "CompositionDeleted"
 	reasonReady     = "CompositionReady"
@@ -46,13 +48,13 @@ const (
 	reasonUpdated   = "CompositionUpdated"
 	reasonInstalled = "CompositionInstalled"
 
+	// Environment variables
 	helmRegistryConfigPathEnvVar = "HELM_REGISTRY_CONFIG_PATH"
 	helmMaxHistoryEnvvar         = "HELM_MAX_HISTORY"
-)
+	krateoNamespaceEnvVar        = "KRATEO_NAMESPACE"
 
-const (
-	eventTypeNormal  = "Normal"
-	eventTypeWarning = "Warning"
+	// Default namespace for Krateo Installation
+	krateoNamespaceDefault = "krateo-system"
 )
 
 var _ controller.ExternalClient = (*handler)(nil)
@@ -95,17 +97,27 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		WithValues("name", mg.GetName()).
 		WithValues("namespace", mg.GetNamespace())
 
-	meta.SetReleaseName(mg, mg.GetName())
+	compositionMeta.SetReleaseName(mg, mg.GetName())
 
 	if h.packageInfoGetter == nil {
 		return controller.ExternalObservation{}, fmt.Errorf("helm chart package info getter must be specified")
 	}
-
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
 		log.Debug("Getting package info", "error", err)
 		return controller.ExternalObservation{}, err
 	}
+
+	compositionMeta.SetCompositionDefinitionLabels(mg, compositionMeta.CompositionDefinitionInfo{
+		Name:      pkg.CompositionDefinitionInfo.Name,
+		Namespace: pkg.CompositionDefinitionInfo.Namespace,
+		GVR:       pkg.CompositionDefinitionInfo.GVR,
+	})
+	// This sets the labels for the composition definition and release name
+	mg, err = tools.Update(ctx, mg, tools.UpdateOptions{
+		Pluralizer:    h.pluralizer,
+		DynamicClient: h.dynamicClient,
+	})
 
 	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
@@ -126,10 +138,22 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}, nil
 	}
 
+	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
+	if err != nil {
+		log.Debug("Converting GVK to GVR", "error", err)
+		return controller.ExternalObservation{}, fmt.Errorf("converting GVK to GVR: %w", err)
+	}
 	// Get Resources and generate RBAC
 	generated, err := h.rbacgen.
 		WithBaseName(meta.GetReleaseName(mg)).
-		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
+		Generate(rbacgen.Parameters{
+			CompositionName:                mg.GetName(),
+			CompositionNamespace:           mg.GetNamespace(),
+			CompositionGVR:                 compositionGVR,
+			CompositionDefinitionName:      pkg.CompositionDefinitionInfo.Name,
+			CompositionDefinitionNamespace: pkg.CompositionDefinitionInfo.Namespace,
+			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
+		})
 	if err != nil {
 		log.Debug("Generating RBAC using chart-inspector", "error", err)
 		return controller.ExternalObservation{}, err
@@ -224,7 +248,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		WithValues("name", mg.GetName()).
 		WithValues("namespace", mg.GetNamespace())
 
-	meta.SetReleaseName(mg, mg.GetName())
+	compositionMeta.SetReleaseName(mg, mg.GetName())
 	mg, err := tools.Update(ctx, mg, tools.UpdateOptions{
 		Pluralizer:    h.pluralizer,
 		DynamicClient: h.dynamicClient,
@@ -243,11 +267,22 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		log.Debug("Getting package info", "error", err)
 		return err
 	}
-
+	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
+	if err != nil {
+		log.Debug("Converting GVK to GVR", "error", err)
+		return fmt.Errorf("converting GVK to GVR: %w", err)
+	}
 	// Get Resources and generate RBAC
 	generated, err := h.rbacgen.
 		WithBaseName(meta.GetReleaseName(mg)).
-		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
+		Generate(rbacgen.Parameters{
+			CompositionName:                mg.GetName(),
+			CompositionNamespace:           mg.GetNamespace(),
+			CompositionGVR:                 compositionGVR,
+			CompositionDefinitionName:      pkg.CompositionDefinitionInfo.Name,
+			CompositionDefinitionNamespace: pkg.CompositionDefinitionInfo.Namespace,
+			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
+		})
 	if err != nil {
 		log.Debug("Generating RBAC using chart-inspector", "error", err)
 		return err
@@ -437,14 +472,22 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	log.Debug("Uninstalling RBAC", "package", pkg.URL)
 
-	// Get Resources and delete RBAC
+	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
+	if err != nil {
+		log.Debug("Converting GVK to GVR", "error", err)
+		return fmt.Errorf("converting GVK to GVR: %w", err)
+	}
+	// Get Resources and generate RBAC
 	generated, err := h.rbacgen.
 		WithBaseName(meta.GetReleaseName(mg)).
-		Generate(string(pkg.CompositionDefinitionInfo.UID), pkg.CompositionDefinitionInfo.Namespace, string(mg.GetUID()), mg.GetNamespace())
-	if err != nil {
-		log.Debug("Generating RBAC using chart-inspector", "error", err)
-		return err
-	}
+		Generate(rbacgen.Parameters{
+			CompositionName:                mg.GetName(),
+			CompositionNamespace:           mg.GetNamespace(),
+			CompositionGVR:                 compositionGVR,
+			CompositionDefinitionName:      pkg.CompositionDefinitionInfo.Name,
+			CompositionDefinitionNamespace: pkg.CompositionDefinitionInfo.Namespace,
+			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
+		})
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
 	err = rbInstaller.UninstallRBAC(generated)
 	if err != nil {

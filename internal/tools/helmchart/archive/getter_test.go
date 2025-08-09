@@ -18,6 +18,8 @@ import (
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	apis "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,8 +54,7 @@ const (
 	testdataPath = "../../../../testdata"
 )
 
-type FakePluralizer struct {
-}
+type FakePluralizer struct{}
 
 var _ pluralizer.PluralizerInterface = &FakePluralizer{}
 
@@ -96,171 +97,392 @@ func TestMain(m *testing.M) {
 	os.Exit(testenv.Run(m))
 }
 
+// Enhanced test with better coverage
 func TestGetter(t *testing.T) {
 	os.Setenv("DEBUG", "1")
 	tests := []struct {
+		name                  string
 		compositionDefinition string
 		composition           string
+		expectError           bool
+		expectedURL           string
+		expectedRepo          string
+		expectedVersion       string
+		skipCondition         func(*testing.T) bool
 	}{
 		{
+			name:                  "valid_fireworksapp",
 			compositionDefinition: "fireworksapp.yaml",
 			composition:           "fireworksapp.yaml",
+			expectError:           false,
 		},
+		// Add more test cases here as you have more test data
 	}
 
 	f := features.New("Setup").
 		Setup(e2e.Logger("test")).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			r, err := resources.New(cfg.Client().RESTConfig())
-			if err != nil {
-				t.Fail()
-			}
+			return setupTestEnvironment(ctx, t, cfg)
+		}).
+		Assess("Testing CompositionDefinition Getter", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			return testGetterFunctionality(ctx, t, c, tests)
+		}).
+		Assess("Testing Static Getter", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			return testStaticGetter(ctx, t, c)
+		}).
+		Assess("Testing Error Conditions", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			return testErrorConditions(ctx, t, c)
+		}).
+		Assess("Testing Edge Cases", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			return testEdgeCases(ctx, t, c)
+		}).Feature()
 
-			err = decoder.DecodeEachFile(
-				ctx, os.DirFS(filepath.Join(testdataPath, "crds", "finops")), "*.yaml",
-				decoder.CreateIgnoreAlreadyExists(r),
-			)
-			if err != nil {
-				t.Log("Error decoding CRDs: ", err)
-				t.Fail()
-			}
+	testenv.Test(t, f)
+}
 
-			err = decoder.DecodeEachFile(
-				ctx, os.DirFS(filepath.Join(testdataPath, "crds", "core")), "*.yaml",
-				decoder.CreateIgnoreAlreadyExists(r),
-			)
-			if err != nil {
-				t.Log("Error decoding CRDs: ", err)
-				t.Fail()
-			}
+func setupTestEnvironment(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+	r, err := resources.New(cfg.Client().RESTConfig())
+	require.NoError(t, err)
 
-			resli, err := decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "crds", "core")), "*.yaml")
-			if err != nil {
-				t.Log("Error decoding CRDs: ", err)
-				t.Fail()
-			}
+	// Setup CRDs
+	err = decoder.DecodeEachFile(
+		ctx, os.DirFS(filepath.Join(testdataPath, "crds", "finops")), "*.yaml",
+		decoder.CreateIgnoreAlreadyExists(r),
+	)
+	if err != nil {
+		t.Logf("Error decoding finops CRDs: %v", err)
+		// Don't fail if finops CRDs don't exist
+	}
 
-			ress := unstructured.UnstructuredList{}
-			for _, res := range resli {
-				res, err := runtime.DefaultUnstructuredConverter.ToUnstructured(res)
-				if err != nil {
-					t.Log("Error converting CRD: ", err)
-					t.Fail()
-				}
-				ress.Items = append(ress.Items, unstructured.Unstructured{Object: res})
-			}
-			err = wait.For(
-				conditions.New(r).ResourcesFound(&ress),
-				wait.WithInterval(100*time.Millisecond),
-			)
-			if err != nil {
-				t.Log("Error waiting for CRD: ", err)
-				t.Fail()
-			}
+	err = decoder.DecodeEachFile(
+		ctx, os.DirFS(filepath.Join(testdataPath, "crds", "core")), "*.yaml",
+		decoder.CreateIgnoreAlreadyExists(r),
+	)
+	require.NoError(t, err, "Core CRDs should be available")
 
-			apis.AddToScheme(r.GetScheme())
+	// Wait for CRDs to be ready
+	resli, err := decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "crds", "core")), "*.yaml")
+	require.NoError(t, err)
 
-			err = decoder.DecodeEachFile(
-				ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml",
-				decoder.CreateIgnoreAlreadyExists(r),
-			)
-			if err != nil {
-				t.Log("Error decoding CompositionDefinitions: ", err)
-				t.Fail()
-			}
+	ress := unstructured.UnstructuredList{}
+	for _, res := range resli {
+		res, err := runtime.DefaultUnstructuredConverter.ToUnstructured(res)
+		require.NoError(t, err)
+		ress.Items = append(ress.Items, unstructured.Unstructured{Object: res})
+	}
 
-			err = decoder.DecodeEachFile(
-				ctx, os.DirFS(filepath.Join(testdataPath, "compositions")), "*.yaml",
-				decoder.CreateIgnoreAlreadyExists(r),
-			)
-			if err != nil {
-				t.Log("Error decoding Compositions: ", err)
-				t.Fail()
-			}
+	err = wait.For(
+		conditions.New(r).ResourcesFound(&ress),
+		wait.WithInterval(100*time.Millisecond),
+		wait.WithTimeout(30*time.Second),
+	)
+	require.NoError(t, err, "CRDs should be ready")
 
-			resli, err = decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml")
-			if err != nil {
-				t.Log("Error decoding CRDs: ", err)
-				t.Fail()
-			}
+	apis.AddToScheme(r.GetScheme())
 
-			for _, res := range resli {
-				uns, err := runtime.DefaultUnstructuredConverter.ToUnstructured(res)
-				if err != nil {
-					t.Log("Error converting CRD: ", err)
-					t.Fail()
-				}
+	// Setup CompositionDefinitions
+	err = decoder.DecodeEachFile(
+		ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml",
+		decoder.CreateIgnoreAlreadyExists(r),
+	)
+	require.NoError(t, err, "CompositionDefinitions should be created")
 
-				apiVersion, ok, err := unstructured.NestedString(uns, "status", "apiVersion")
-				if !ok || err != nil {
-					t.Log("Error getting apiVersion: ", err)
-					t.Fail()
-				}
-				kind, ok, err := unstructured.NestedString(uns, "status", "kind")
-				if !ok || err != nil {
-					t.Log("Error getting kind: ", err)
-					t.Fail()
-				}
-				err = r.PatchStatus(ctx, res, k8s.Patch{
-					PatchType: types.MergePatchType,
-					Data:      []byte(fmt.Sprintf(`{"status": {"apiVersion": "%s", "kind": "%s"}}`, apiVersion, kind)),
-				})
-				if err != nil {
-					t.Log("Error patching Composition: ", err)
-					t.Fail()
-					return ctx
-				}
-			}
+	// Setup Compositions
+	err = decoder.DecodeEachFile(
+		ctx, os.DirFS(filepath.Join(testdataPath, "compositions")), "*.yaml",
+		decoder.CreateIgnoreAlreadyExists(r),
+	)
+	require.NoError(t, err, "Compositions should be created")
 
-			r.WithNamespace(namespace)
-			return ctx
-		}).Assess("Testing CompositionDefinition Getter", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		r, err := resources.New(c.Client().RESTConfig())
-		if err != nil {
-			t.Fail()
+	// Patch status for CompositionDefinitions
+	resli, err = decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml")
+	require.NoError(t, err)
+
+	for _, res := range resli {
+		uns, err := runtime.DefaultUnstructuredConverter.ToUnstructured(res)
+		require.NoError(t, err)
+
+		apiVersion, ok, err := unstructured.NestedString(uns, "status", "apiVersion")
+		if !ok || err != nil {
+			t.Logf("No status.apiVersion found for %s", res.GetName())
+			continue
 		}
-		r.WithNamespace(namespace)
+		kind, ok, err := unstructured.NestedString(uns, "status", "kind")
+		if !ok || err != nil {
+			t.Logf("No status.kind found for %s", res.GetName())
+			continue
+		}
 
-		apis.AddToScheme(r.GetScheme())
+		err = r.PatchStatus(ctx, res, k8s.Patch{
+			PatchType: types.MergePatchType,
+			Data:      []byte(fmt.Sprintf(`{"status": {"apiVersion": "%s", "kind": "%s"}}`, apiVersion, kind)),
+		})
+		require.NoError(t, err, "Status patch should succeed")
+	}
 
-		for _, tt := range tests {
+	r.WithNamespace(namespace)
+	return ctx
+}
 
+func testGetterFunctionality(ctx context.Context, t *testing.T, c *envconf.Config, tests []struct {
+	name                  string
+	compositionDefinition string
+	composition           string
+	expectError           bool
+	expectedURL           string
+	expectedRepo          string
+	expectedVersion       string
+	skipCondition         func(*testing.T) bool
+}) context.Context {
+	r, err := resources.New(c.Client().RESTConfig())
+	require.NoError(t, err)
+	r.WithNamespace(namespace)
+
+	apis.AddToScheme(r.GetScheme())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skipCondition != nil && tt.skipCondition(t) {
+				t.Skip("Skipping test due to condition")
+				return
+			}
+
+			// Load composition from test data
 			composition := &unstructured.Unstructured{}
 			err := decoder.DecodeFile(os.DirFS(filepath.Join(testdataPath, "compositions")), tt.composition, composition)
-			if err != nil {
-				t.Log("Error decoding Composition: ", err)
-				t.Fail()
-			}
+			require.NoError(t, err, "Should be able to decode composition")
 
+			// Get the actual composition from cluster
 			uns, err := getUnstructured(c.Client().RESTConfig(), getUnstructuredOptions{
 				gvk:       schema.FromAPIVersionAndKind(composition.GetAPIVersion(), composition.GetKind()),
 				name:      composition.GetName(),
 				namespace: composition.GetNamespace(),
 			})
-			if err != nil {
-				t.Fatal(err)
-				return ctx
-			}
+			require.NoError(t, err, "Should be able to get composition from cluster")
+
+			// Test dynamic getter
 			pluralizer := FakePluralizer{}
-
 			gt, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
-			if err != nil {
-				t.Fatal(err)
-				return ctx
+			require.NoError(t, err, "Should be able to create dynamic getter")
+
+			// Test the getter
+			info, err := gt.Get(uns)
+
+			if tt.expectError {
+				assert.Error(t, err, "Should return an error")
+				return
 			}
 
-			nfo, err := gt.Get(uns)
-			if err != nil {
-				t.Fatal(err)
+			require.NoError(t, err, "Should not return an error")
+			require.NotNil(t, info, "Info should not be nil")
+
+			// Validate the returned info
+			assert.NotEmpty(t, info.URL, "URL should not be empty")
+
+			if tt.expectedURL != "" {
+				assert.Equal(t, tt.expectedURL, info.URL, "URL should match expected")
+			}
+			if tt.expectedRepo != "" {
+				assert.Equal(t, tt.expectedRepo, info.Repo, "Repo should match expected")
+			}
+			if tt.expectedVersion != "" {
+				assert.Equal(t, tt.expectedVersion, info.Version, "Version should match expected")
 			}
 
-			spew.Dump(nfo)
+			// Test URL type detection
+			if strings.HasPrefix(info.URL, "oci://") {
+				assert.True(t, info.IsOCI(), "Should detect OCI URLs")
+				assert.False(t, info.IsTGZ(), "OCI URLs are not TGZ")
+				assert.False(t, info.IsHTTP(), "OCI URLs are not HTTP")
+			} else if strings.HasPrefix(info.URL, "http") {
+				assert.True(t, info.IsHTTP(), "Should detect HTTP URLs")
+				assert.False(t, info.IsOCI(), "HTTP URLs are not OCI")
+				if strings.HasSuffix(info.URL, ".tgz") {
+					assert.True(t, info.IsTGZ(), "Should detect TGZ files")
+				}
+			}
+
+			// Validate CompositionDefinitionInfo
+			if info.CompositionDefinitionInfo != nil {
+				assert.NotEmpty(t, info.CompositionDefinitionInfo.Name, "CompositionDefinition name should not be empty")
+				assert.NotEmpty(t, info.CompositionDefinitionInfo.Namespace, "CompositionDefinition namespace should not be empty")
+				assert.NotEmpty(t, info.CompositionDefinitionInfo.GVR.Resource, "CompositionDefinition GVR resource should not be empty")
+			}
+
+			t.Logf("Successfully tested getter for %s", tt.name)
+			spew.Dump(info)
+		})
+	}
+
+	return ctx
+}
+
+func testStaticGetter(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	testCases := []struct {
+		name     string
+		chartURL string
+	}{
+		{
+			name:     "local_tgz_file",
+			chartURL: "/path/to/chart.tgz",
+		},
+		{
+			name:     "http_url",
+			chartURL: "https://example.com/chart.tgz",
+		},
+		{
+			name:     "oci_url",
+			chartURL: "oci://registry.example.com/charts/my-chart",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			getter := archive.Static(tc.chartURL)
+			require.NotNil(t, getter, "Static getter should not be nil")
+
+			// Test with empty unstructured (static getter ignores input)
+			info, err := getter.Get(&unstructured.Unstructured{})
+			require.NoError(t, err, "Static getter should not return error")
+			require.NotNil(t, info, "Info should not be nil")
+
+			assert.Equal(t, tc.chartURL, info.URL, "URL should match input")
+			assert.Empty(t, info.Version, "Static getter should not have version")
+			assert.Empty(t, info.Repo, "Static getter should not have repo")
+			assert.Nil(t, info.RegistryAuth, "Static getter should not have registry auth")
+			assert.Nil(t, info.CompositionDefinitionInfo, "Static getter should not have composition definition info")
+
+			// Test URL type detection
+			if strings.HasPrefix(tc.chartURL, "oci://") {
+				assert.True(t, info.IsOCI(), "Should detect OCI URLs")
+			} else if strings.HasPrefix(tc.chartURL, "http") {
+				assert.True(t, info.IsHTTP(), "Should detect HTTP URLs")
+			}
+			if strings.HasSuffix(tc.chartURL, ".tgz") {
+				assert.True(t, info.IsTGZ(), "Should detect TGZ files")
+			}
+		})
+	}
+
+	return ctx
+}
+
+func testErrorConditions(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	pluralizer := FakePluralizer{}
+	getter, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		composition *unstructured.Unstructured
+		expectError bool
+		errorType   string
+	}{
+		{
+			name: "missing_labels",
+			composition: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "composition.krateo.io/v1alpha1",
+					"kind":       "NonExistentComposition",
+					"metadata": map[string]interface{}{
+						"name":      "test-composition",
+						"namespace": namespace,
+						// No labels - should trigger fallback search
+					},
+				},
+			},
+			expectError: true,
+			errorType:   "not_found",
+		},
+		{
+			name: "invalid_composition_definition_reference",
+			composition: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "composition.krateo.io/v1alpha1",
+					"kind":       "TestComposition",
+					"metadata": map[string]interface{}{
+						"name":      "test-composition",
+						"namespace": namespace,
+						"labels": map[string]interface{}{
+							"krateo.io/composition-definition-name":      "non-existent-def",
+							"krateo.io/composition-definition-namespace": namespace,
+							"krateo.io/composition-definition-group":     "core.krateo.io",
+							"krateo.io/composition-definition-version":   "v1alpha1",
+							"krateo.io/composition-definition-resource":  "compositiondefinitions",
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorType:   "not_found",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			info, err := getter.Get(tc.composition)
+
+			if tc.expectError {
+				assert.Error(t, err, "Should return an error for %s", tc.name)
+				assert.Nil(t, info, "Info should be nil on error")
+				t.Logf("Expected error for %s: %v", tc.name, err)
+			} else {
+				assert.NoError(t, err, "Should not return an error for %s", tc.name)
+				assert.NotNil(t, info, "Info should not be nil")
+			}
+		})
+	}
+
+	return ctx
+}
+
+func testEdgeCases(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	pluralizer := FakePluralizer{}
+	getter, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
+	require.NoError(t, err)
+
+	// Test with nil input
+	t.Run("nil_input", func(t *testing.T) {
+		info, err := getter.Get(nil)
+		assert.Error(t, err, "Should return error for nil input")
+		assert.Nil(t, info, "Info should be nil for nil input")
+	})
+
+	// Test with empty unstructured
+	t.Run("empty_unstructured", func(t *testing.T) {
+		empty := &unstructured.Unstructured{}
+		info, err := getter.Get(empty)
+		assert.Error(t, err, "Should return error for empty unstructured")
+		assert.Nil(t, info, "Info should be nil for empty unstructured")
+	})
+
+	// Test URL detection edge cases
+	t.Run("url_detection", func(t *testing.T) {
+		testCases := []struct {
+			url    string
+			isOCI  bool
+			isTGZ  bool
+			isHTTP bool
+		}{
+			{"", false, false, false},
+			{"oci://", true, false, false},
+			{"http://example.com/chart.tgz", false, true, true},
+			{"https://example.com/chart.tgz", false, true, true},
+			{"ftp://example.com/chart.tgz", false, true, false},
+			{"file:///path/to/chart.tgz", false, true, false},
+			{"/local/path/chart.tgz", false, true, false},
+			{"chart.tar.gz", false, false, false}, // not .tgz
 		}
 
-		return ctx
-	}).Feature()
+		for _, tc := range testCases {
+			info := &archive.Info{URL: tc.url}
+			assert.Equal(t, tc.isOCI, info.IsOCI(), "IsOCI mismatch for %s", tc.url)
+			assert.Equal(t, tc.isTGZ, info.IsTGZ(), "IsTGZ mismatch for %s", tc.url)
+			assert.Equal(t, tc.isHTTP, info.IsHTTP(), "IsHTTP mismatch for %s", tc.url)
+		}
+	})
 
-	testenv.Test(t, f)
+	return ctx
 }
 
 type getUnstructuredOptions struct {

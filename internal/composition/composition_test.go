@@ -240,11 +240,13 @@ func TestController(t *testing.T) {
 		}
 
 		version := obj.GetLabels()["krateo.io/composition-version"]
-		u, err := dynamic.Resource(schema.GroupVersionResource{
+		cli := dynamic.Resource(schema.GroupVersionResource{
 			Group:    "composition.krateo.io",
 			Version:  version,
 			Resource: flect.Pluralize(strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind)),
-		}).Namespace(obj.GetNamespace()).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		}).Namespace(obj.GetNamespace())
+
+		u, err := cli.Get(ctx, obj.GetName(), metav1.GetOptions{})
 		if err != nil {
 			t.Error("Getting composition.", "error", err)
 			return ctx
@@ -253,6 +255,12 @@ func TestController(t *testing.T) {
 		observation, err := handler.Observe(ctx, u)
 		if err != nil {
 			t.Error("Observing composition.", "error", err)
+			return ctx
+		}
+
+		u, err = cli.Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Error("Getting composition.", "error", err)
 			return ctx
 		}
 

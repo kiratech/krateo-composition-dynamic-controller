@@ -5,19 +5,17 @@ import (
 	"testing"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/rbac"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type MockChartInspector struct {
 	mock.Mock
 }
 
-func (m *MockChartInspector) Resources(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace string) ([]chartinspector.Resource, error) {
-	args := m.Called(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace)
+func (m *MockChartInspector) Resources(params chartinspector.Parameters) ([]chartinspector.Resource, error) {
+	args := m.Called(params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -26,83 +24,235 @@ func (m *MockChartInspector) Resources(compositionDefinitionUID, compositionDefi
 
 var _ chartinspector.ChartInspectorInterface = &MockChartInspector{}
 
-func TestRBACGen_Generate(t *testing.T) {
+func TestNewRBACGen(t *testing.T) {
+	mockInspector := new(MockChartInspector)
+	rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector)
 
-	t.Run("successfully generates RBAC policies", func(t *testing.T) {
+	assert.NotNil(t, rbacGen)
+	assert.Equal(t, "test-sa", rbacGen.saName)
+	assert.Equal(t, "test-namespace", rbacGen.saNamespace)
+	assert.Equal(t, mockInspector, rbacGen.chartInspector)
+	assert.Empty(t, rbacGen.baseName)
+}
+
+func TestRBACGen_WithBaseName(t *testing.T) {
+	mockInspector := new(MockChartInspector)
+	rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector)
+
+	result := rbacGen.WithBaseName("test-base")
+
+	assert.Equal(t, rbacGen, result)
+	assert.Equal(t, "test-base", rbacGen.baseName)
+}
+
+func TestRBACGen_Generate(t *testing.T) {
+	t.Run("successfully generates RBAC policies with mixed resources", func(t *testing.T) {
 		mockInspector := new(MockChartInspector)
 		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
+
+		params := Parameters{
+			CompositionName:                "test-comp",
+			CompositionNamespace:           "comp-ns",
+			CompositionGVR:                 schema.GroupVersionResource{Group: "comp.group", Version: "v1", Resource: "compositions"},
+			CompositionDefinitionName:      "test-compdef",
+			CompositionDefinitionNamespace: "compdef-ns",
+			CompositionDefintionGVR:        schema.GroupVersionResource{Group: "compdef.group", Version: "v1", Resource: "compositiondefinitions"},
+		}
+
 		mockResources := []chartinspector.Resource{
-			{Group: "group1", Resource: "resource1", Name: "name1"},
-			{Group: "group2", Resource: "resource2", Name: "name2", Namespace: "namespace1"},
-			{Group: "", Resource: "resource3", Name: "name3"},
-			{Group: "", Resource: "resource4", Name: "name4", Namespace: "namespace1"},
+			{Group: "group1", Resource: "resource1", Name: "name1", Version: "v1"},
+			{Group: "group2", Resource: "resource2", Name: "name2", Namespace: "namespace1", Version: "v1"},
+			{Group: "", Resource: "resource3", Name: "name3", Version: "v1"},
+			{Group: "", Resource: "resource4", Name: "name4", Namespace: "namespace1", Version: "v1"},
 			{Group: "", Resource: "namespaces", Version: "v1", Name: "namespace1"},
 		}
-		mockInspector.On("Resources", "compDefUID", "compDefNS", "compUID", "compNS").Return(mockResources, nil)
 
-		expectedPolicy := &rbac.RBAC{
-			ClusterRole:        rbac.InitClusterRole("test-base"),
-			ClusterRoleBinding: rbac.InitClusterRoleBinding("test-base", "test-base", "test-sa", "test-namespace"),
-			Namespaced: map[string]rbac.Namespaced{
-				"namespace1": {
-					Role:        rbac.InitRole("test-base", "namespace1"),
-					RoleBinding: rbac.InitRoleBinding("test-base", "test-base", "namespace1", "test-sa", "test-namespace"),
-				},
-			},
-			Namespaces: []*corev1.Namespace{},
+		expectedParams := chartinspector.Parameters{
+			CompositionName:                params.CompositionName,
+			CompositionNamespace:           params.CompositionNamespace,
+			CompositionGroup:               params.CompositionGVR.Group,
+			CompositionVersion:             params.CompositionGVR.Version,
+			CompositionResource:            params.CompositionGVR.Resource,
+			CompositionDefinitionName:      params.CompositionDefinitionName,
+			CompositionDefinitionNamespace: params.CompositionDefinitionNamespace,
+			CompositionDefinitionGroup:     params.CompositionDefintionGVR.Group,
+			CompositionDefinitionVersion:   params.CompositionDefintionGVR.Version,
+			CompositionDefinitionResource:  params.CompositionDefintionGVR.Resource,
 		}
 
-		expectedPolicy.Namespaces = append(expectedPolicy.Namespaces, rbac.CreateNamespace("namespace1", "test-base", "compNS"))
+		mockInspector.On("Resources", expectedParams).Return(mockResources, nil)
 
-		expectedPolicy.ClusterRole.Rules = append(expectedPolicy.ClusterRole.Rules, rbacv1.PolicyRule{
-			APIGroups: []string{"group1"},
-			Resources: []string{"resource1"},
-			Verbs:     []string{"*"},
-			// ResourceNames: []string{"name1"},
-		})
-		expectedPolicy.Namespaced["namespace1"].Role.Rules = append(expectedPolicy.Namespaced["namespace1"].Role.Rules, rbacv1.PolicyRule{
-			APIGroups: []string{"group2"},
-			Resources: []string{"resource2"},
-			Verbs:     []string{"*"},
-			// ResourceNames: []string{"name2"},
-		})
-		expectedPolicy.ClusterRole.Rules = append(expectedPolicy.ClusterRole.Rules, rbacv1.PolicyRule{
-			APIGroups: []string{""},
-			Resources: []string{"resource3"},
-			Verbs:     []string{"*"},
-			// ResourceNames: []string{"name3"},
-		})
+		policy, err := rbacGen.Generate(params)
 
-		expectedPolicy.ClusterRole.Rules = append(expectedPolicy.ClusterRole.Rules, rbacv1.PolicyRule{
-			APIGroups: []string{""},
-			Resources: []string{"namespaces"},
-			Verbs:     []string{"*"},
-			// ResourceNames: []string{"namespace1"},
-		})
-
-		expectedPolicy.Namespaced["namespace1"].Role.Rules = append(expectedPolicy.Namespaced["namespace1"].Role.Rules, rbacv1.PolicyRule{
-			APIGroups: []string{""},
-			Resources: []string{"resource4"},
-			Verbs:     []string{"*"},
-			// ResourceNames: []string{"name4"},
-		})
-
-		policy, err := rbacGen.Generate("compDefUID", "compDefNS", "compUID", "compNS")
 		assert.NoError(t, err)
-		assert.Equal(t, expectedPolicy, policy)
+		assert.NotNil(t, policy)
+
+		// Verify cluster role rules
+		assert.Len(t, policy.ClusterRole.Rules, 3) // group1/resource1, core/resource3, core/namespaces
+
+		// Verify namespaced resources
+		assert.Len(t, policy.Namespaced, 1)
+		assert.Contains(t, policy.Namespaced, "namespace1")
+		assert.Len(t, policy.Namespaced["namespace1"].Role.Rules, 2) // group2/resource2, core/resource4
+
+		// Verify namespace creation
+		assert.Len(t, policy.Namespaces, 1)
+
+		mockInspector.AssertExpectations(t)
+	})
+
+	t.Run("successfully generates RBAC policies with only cluster resources", func(t *testing.T) {
+		mockInspector := new(MockChartInspector)
+		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
+
+		params := Parameters{
+			CompositionName:      "test-comp",
+			CompositionNamespace: "comp-ns",
+			CompositionGVR:       schema.GroupVersionResource{Group: "comp.group", Version: "v1", Resource: "compositions"},
+		}
+
+		mockResources := []chartinspector.Resource{
+			{Group: "group1", Resource: "resource1", Name: "name1", Version: "v1"},
+			{Group: "group2", Resource: "resource2", Name: "name2", Version: "v1"},
+		}
+
+		expectedParams := chartinspector.Parameters{
+			CompositionName:      params.CompositionName,
+			CompositionNamespace: params.CompositionNamespace,
+			CompositionGroup:     params.CompositionGVR.Group,
+			CompositionVersion:   params.CompositionGVR.Version,
+			CompositionResource:  params.CompositionGVR.Resource,
+		}
+
+		mockInspector.On("Resources", expectedParams).Return(mockResources, nil)
+
+		policy, err := rbacGen.Generate(params)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, policy)
+		assert.Len(t, policy.ClusterRole.Rules, 2)
+		assert.Empty(t, policy.Namespaced)
+		assert.Empty(t, policy.Namespaces)
+
+		mockInspector.AssertExpectations(t)
+	})
+
+	t.Run("successfully generates RBAC policies with only namespaced resources", func(t *testing.T) {
+		mockInspector := new(MockChartInspector)
+		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
+
+		params := Parameters{
+			CompositionName:      "test-comp",
+			CompositionNamespace: "comp-ns",
+		}
+
+		mockResources := []chartinspector.Resource{
+			{Group: "group1", Resource: "resource1", Name: "name1", Namespace: "ns1", Version: "v1"},
+			{Group: "group2", Resource: "resource2", Name: "name2", Namespace: "ns2", Version: "v1"},
+			{Group: "group3", Resource: "resource3", Name: "name3", Namespace: "ns1", Version: "v1"},
+		}
+
+		expectedParams := chartinspector.Parameters{
+			CompositionName:      params.CompositionName,
+			CompositionNamespace: params.CompositionNamespace,
+		}
+
+		mockInspector.On("Resources", expectedParams).Return(mockResources, nil)
+
+		policy, err := rbacGen.Generate(params)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, policy)
+		assert.Empty(t, policy.ClusterRole.Rules)
+		assert.Len(t, policy.Namespaced, 2)                   // ns1 and ns2
+		assert.Len(t, policy.Namespaced["ns1"].Role.Rules, 2) // group1/resource1, group3/resource3
+		assert.Len(t, policy.Namespaced["ns2"].Role.Rules, 1) // group2/resource2
+		assert.Empty(t, policy.Namespaces)
+
+		mockInspector.AssertExpectations(t)
+	})
+
+	t.Run("successfully generates RBAC policies with no resources", func(t *testing.T) {
+		mockInspector := new(MockChartInspector)
+		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
+
+		params := Parameters{
+			CompositionName:      "test-comp",
+			CompositionNamespace: "comp-ns",
+		}
+
+		mockResources := []chartinspector.Resource{}
+
+		expectedParams := chartinspector.Parameters{
+			CompositionName:      params.CompositionName,
+			CompositionNamespace: params.CompositionNamespace,
+		}
+
+		mockInspector.On("Resources", expectedParams).Return(mockResources, nil)
+
+		policy, err := rbacGen.Generate(params)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, policy)
+		assert.Empty(t, policy.ClusterRole.Rules)
+		assert.Empty(t, policy.Namespaced)
+		assert.Empty(t, policy.Namespaces)
+
 		mockInspector.AssertExpectations(t)
 	})
 
 	t.Run("returns error when chartInspector fails", func(t *testing.T) {
 		mockInspector := new(MockChartInspector)
 		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
-		mockInspector.On("Resources", "compDefUID", "compDefNS", "compUID", "compNS").Return(nil, errors.New("some error"))
 
-		policy, err := rbacGen.Generate("compDefUID", "compDefNS", "compUID", "compNS")
+		params := Parameters{
+			CompositionName:      "test-comp",
+			CompositionNamespace: "comp-ns",
+		}
+
+		expectedParams := chartinspector.Parameters{
+			CompositionName:      params.CompositionName,
+			CompositionNamespace: params.CompositionNamespace,
+		}
+
+		mockInspector.On("Resources", expectedParams).Return(nil, errors.New("some error"))
+
+		policy, err := rbacGen.Generate(params)
 
 		assert.Error(t, err)
 		assert.Nil(t, policy)
 		assert.EqualError(t, err, "getting resources: some error")
+		mockInspector.AssertExpectations(t)
+	})
+
+	t.Run("handles namespace resource creation correctly", func(t *testing.T) {
+		mockInspector := new(MockChartInspector)
+		rbacGen := NewRBACGen("test-sa", "test-namespace", mockInspector).WithBaseName("test-base")
+
+		params := Parameters{
+			CompositionName:      "test-comp",
+			CompositionNamespace: "comp-ns",
+		}
+
+		mockResources := []chartinspector.Resource{
+			{Group: "", Resource: "namespaces", Version: "v1", Name: "test-namespace"},
+			{Group: "", Resource: "namespaces", Version: "v1", Name: "another-namespace"},
+		}
+
+		expectedParams := chartinspector.Parameters{
+			CompositionName:      params.CompositionName,
+			CompositionNamespace: params.CompositionNamespace,
+		}
+
+		mockInspector.On("Resources", expectedParams).Return(mockResources, nil)
+
+		policy, err := rbacGen.Generate(params)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, policy)
+		assert.Len(t, policy.ClusterRole.Rules, 2) // Both namespace resources should be in cluster role
+		assert.Len(t, policy.Namespaces, 2)        // Both namespaces should be created
+
 		mockInspector.AssertExpectations(t)
 	})
 }

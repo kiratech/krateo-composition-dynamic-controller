@@ -4,17 +4,27 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/krateoplatformops/plumbing/ptr"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/utils/ptr"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/rbac"
 )
 
 type RBACGenInterface interface {
-	Generate(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace string) (*rbac.RBAC, error)
-	WithBaseName(baseName string) RBACGenInterface
+	Generate(Parameters) (*rbac.RBAC, error)
+	WithBaseName(string) RBACGenInterface
+}
+
+type Parameters struct {
+	CompositionName                string                      // The name of the composition. Required.
+	CompositionNamespace           string                      // The namespace of the composition. Required.
+	CompositionGVR                 schema.GroupVersionResource // The GVR of the composition.
+	CompositionDefinitionName      string                      // The name of the composition definition. Required.
+	CompositionDefinitionNamespace string                      // The namespace of the composition definition.
+	CompositionDefintionGVR        schema.GroupVersionResource // The GVR of the composition definition.
 }
 
 type RBACGen struct {
@@ -39,8 +49,19 @@ func (r *RBACGen) WithBaseName(baseName string) RBACGenInterface {
 	return r
 }
 
-func (r *RBACGen) Generate(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace string) (*rbac.RBAC, error) {
-	resources, err := r.chartInspector.Resources(compositionDefinitionUID, compositionDefinitionNamespace, compositionUID, compositionNamespace)
+func (r *RBACGen) Generate(params Parameters) (*rbac.RBAC, error) {
+	resources, err := r.chartInspector.Resources(chartinspector.Parameters{
+		CompositionName:                params.CompositionName,
+		CompositionNamespace:           params.CompositionNamespace,
+		CompositionGroup:               params.CompositionGVR.Group,
+		CompositionVersion:             params.CompositionGVR.Version,
+		CompositionResource:            params.CompositionGVR.Resource,
+		CompositionDefinitionName:      params.CompositionDefinitionName,
+		CompositionDefinitionNamespace: params.CompositionDefinitionNamespace,
+		CompositionDefinitionGroup:     params.CompositionDefintionGVR.Group,
+		CompositionDefinitionVersion:   params.CompositionDefintionGVR.Version,
+		CompositionDefinitionResource:  params.CompositionDefintionGVR.Resource,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("getting resources: %w", err)
 	}
@@ -55,7 +76,7 @@ func (r *RBACGen) Generate(compositionDefinitionUID, compositionDefinitionNamesp
 		if resource.Namespace == "" {
 			if resource.Group == "" && resource.Resource == "namespaces" && resource.Version == "v1" {
 				// If the resource is a namespace, we need to create a namespace object
-				policy.Namespaces = append(policy.Namespaces, rbac.CreateNamespace(resource.Name, r.baseName, compositionNamespace))
+				policy.Namespaces = append(policy.Namespaces, rbac.CreateNamespace(resource.Name, r.baseName, params.CompositionNamespace))
 			}
 
 			policy.ClusterRole.Rules = append(policy.ClusterRole.Rules, rbacv1.PolicyRule{
