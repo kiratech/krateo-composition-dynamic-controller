@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
+	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,6 +56,13 @@ func Update(ctx context.Context, opts UpdateOptions) (*release.Release, error) {
 	gvr, err := opts.Pluralizer.GVKtoGVR(opts.Resource.GetObjectKind().GroupVersionKind())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get GVR: %w", err)
+	}
+
+	if compositionMeta.IsGracefullyPaused(opts.Resource) {
+		dat, err = AddOrUpdateFieldInValues(dat, "true", "global", "gracefullyPaused")
+		if err != nil {
+			return nil, fmt.Errorf("failed to add gracefullyPaused to values: %w", err)
+		}
 	}
 
 	dat, err = AddOrUpdateFieldInValues(dat, opts.Resource.GetNamespace(), "global", "compositionNamespace")

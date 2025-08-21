@@ -1,6 +1,9 @@
 package meta
 
 import (
+	"time"
+
+	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -15,6 +18,15 @@ const (
 
 	// ReleaseNameLabel is the label used to identify the release name of a Helm chart that can be different from the name of the resource.
 	ReleaseNameLabel = "krateo.io/release-name"
+
+	// AnnotationKeyReconciliationGracefullyPaused is the key in the annotations map
+	// that indicates whether the reconciliation of the resource is gracefully paused.
+	AnnotationKeyReconciliationGracefullyPaused = "krateo.io/gracefully-paused"
+
+	// AnnotationKeyReconciliationGracefullyPausedTime is the key in the annotations map
+	// that indicates the time when the reconciliation was gracefully paused.
+	// This is used to track how long the resource has been paused.
+	AnnotationKeyReconciliationGracefullyPausedTime = "krateo.io/gracefully-paused-time"
 )
 
 func GetReleaseName(o metav1.Object) string {
@@ -57,4 +69,26 @@ func SetCompositionDefinitionLabels(o metav1.Object, cdInfo CompositionDefinitio
 	labels[CompositionDefinitionResourceLabel] = cdInfo.GVR.Resource
 
 	o.SetLabels(labels)
+}
+
+// IsGracefullyPaused returns true if the object has the AnnotationKeyGracefullyPaused
+// annotation set to `true`.
+func IsGracefullyPaused(o metav1.Object) bool {
+	return o.GetAnnotations()[AnnotationKeyReconciliationGracefullyPaused] == "true"
+}
+
+func SetGracefullyPausedTime(o metav1.Object, t time.Time) {
+	meta.AddAnnotations(o, map[string]string{AnnotationKeyReconciliationGracefullyPausedTime: t.Format(time.RFC3339)})
+}
+
+func GetGracefullyPausedTime(o metav1.Object) (time.Time, bool) {
+	t, ok := o.GetAnnotations()[AnnotationKeyReconciliationGracefullyPausedTime]
+	if !ok {
+		return time.Time{}, false
+	}
+	pausedTime, err := time.Parse(time.RFC3339, t)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return pausedTime, true
 }

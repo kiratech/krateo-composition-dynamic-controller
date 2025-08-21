@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
 	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 
 	"github.com/go-logr/logr"
@@ -195,6 +197,13 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsServerBindAddress,
 		},
+		WatchAnnotations: ctrlevent.NewAnnotationEvents(
+			ctrlevent.AnnotationEvent{
+				EventType:  ctrlevent.Observe,
+				Annotation: compositionMeta.AnnotationKeyReconciliationGracefullyPaused,
+				OnAction:   ctrlevent.OnAny,
+			},
+		),
 	})
 	controller.SetExternalClient(handler)
 

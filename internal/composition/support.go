@@ -3,6 +3,8 @@ package composition
 import (
 	"fmt"
 
+	compositionCondition "github.com/krateoplatformops/composition-dynamic-controller/internal/condition"
+
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
@@ -19,7 +21,7 @@ type ManagedResource struct {
 	Namespace  string `json:"namespace"`
 }
 
-func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message string) error {
+func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message string, force bool) error {
 	if pkg == nil {
 		return fmt.Errorf("package info is nil")
 	}
@@ -27,13 +29,35 @@ func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message 
 	unstructured.SetNestedField(mg.Object, pkg.Version, "status", "helmChartVersion")
 	unstructured.SetNestedField(mg.Object, pkg.URL, "status", "helmChartUrl")
 
-	currentCondition := unstructuredtools.GetCondition(mg, condition.Available().Type, condition.Available().Reason)
+	if !force {
+		currentCondition := unstructuredtools.GetCondition(mg, condition.Available().Type, condition.Available().Reason)
 
-	if currentCondition != nil && currentCondition.Message == message {
-		return nil
+		if currentCondition != nil && currentCondition.Message == message {
+			return nil
+		}
 	}
+
 	cond := condition.Available()
 	cond.Message = message
+	err := unstructuredtools.SetConditions(mg, cond)
+	if err != nil {
+		return fmt.Errorf("setting condition: %w", err)
+	}
+	return nil
+}
+
+func setGracefullyPausedCondition(mg *unstructured.Unstructured, pkg *archive.Info) error {
+	if pkg == nil {
+		return fmt.Errorf("package info is nil")
+	}
+
+	currentCondition := unstructuredtools.GetCondition(mg, compositionCondition.ReconcileGracefullyPaused().Type, compositionCondition.ReconcileGracefullyPaused().Reason)
+
+	if currentCondition != nil && currentCondition.Message == "Composition is gracefully paused." {
+		return nil
+	}
+	cond := compositionCondition.ReconcileGracefullyPaused()
+	cond.Message = "Composition is gracefully paused."
 	err := unstructuredtools.SetConditions(mg, cond)
 	if err != nil {
 		return fmt.Errorf("setting condition: %w", err)
