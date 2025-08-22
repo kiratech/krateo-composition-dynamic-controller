@@ -95,6 +95,47 @@ The values are injected in the following way:
 | `global.compositionResource` | `krateo.io/composition-resource` | The plural name of the composition resource. |
 | `global.compositionKind` | `krateo.io/composition-kind` | The kind of the composition resource. |
 | `global.krateoNamespace` | `krateo.io/krateo-namespace` | The namespace where Krateo is installed. This value is used to identify the Krateo resources in the cluster. |
+| `global.gracefullyPaused`| not injected | This value is set to `true` if the annotation `krateo.io/gracefully-paused` is set on the composition resource. This value is used to pause the reconciliation of the composition resource only after the value is injected in the helm release values with a successful helm upgrade. Read the [paragraph below](#about-the-gracefullypaused-value) for more details. |
+
+### About the `gracefullyPaused` value
+
+The `global.gracefullyPaused` value provides a way to gracefully pause both the composition resource and all Krateo resources within its Helm chart.
+
+#### How it works:
+1. **Trigger**: Set the annotation `krateo.io/gracefully-paused` on the composition resource
+2. **Activation**: The pause takes effect only after the next successful Helm upgrade injects this value into the chart
+3. **Scope**: Pauses both the composition reconciliation AND any Krateo resources in the chart that respect the `krateo.io/paused` annotation
+
+#### Use cases:
+- **Graceful pause**: Temporarily halt all composition-related activity without resource deletion
+- **Coordinated pause**: Ensure both the composition and its managed resources pause simultaneously
+- **Safe maintenance**: Pause operations during maintenance windows
+
+#### Comparison with `krateo.io/paused`:
+
+| Annotation | Scope | When it takes effect |
+|------------|-------|---------------------|
+| `krateo.io/gracefully-paused` | Composition + chart resources | After next Helm upgrade |
+| `krateo.io/paused` | Composition only | Immediately |
+
+**Example**: Use `krateo.io/gracefully-paused` when you need to pause an entire application stack, or `krateo.io/paused` for immediate composition-only pausing.
+
+#### How to include the pause in a resource included in the chart
+
+To include the pause in a resource included in the chart, you can use the `krateo.io/paused` annotation on the resource. This will ensure that the resource is paused when the composition is paused.
+
+```yaml
+apiVersion: git.krateo.io/v1alpha1
+kind: Repo
+metadata:
+  name: {{ include "fireworks-app.fullname" . }}-repo
+  labels:
+    {{- include "fireworks-app.labels" . | nindent 4 }}
+  annotations:
+    krateo.io/paused: "{{ default false (and .Values.global .Values.global.gracefullyPaused) }}"
+spec:
+...
+```
 
 ## Configuration
 
