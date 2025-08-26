@@ -104,10 +104,11 @@ func main() {
 	if len(*kubeconfig) > 0 {
 		cfg, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	} else {
-		cfg, err = rest.InClusterConfig()
+		cfg, err = genctrl.GetConfig()
 	}
 	if err != nil {
-		log.Debug("Building kubeconfig.", "error", err)
+		log.Error(err, "Building kubeconfig.")
+		os.Exit(1)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), []os.Signal{
@@ -122,19 +123,22 @@ func main() {
 
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
-		log.Debug("Creating dynamic client.", "error", err)
+		log.Error(err, "Creating dynamic client.")
+		os.Exit(1)
 	}
 
 	discovery, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		log.Debug("Creating discovery client.", "error", err)
+		log.Error(err, "Creating discovery client.")
+		os.Exit(1)
 	}
 
 	cachedDisc := memory.NewMemCacheClient(discovery)
 
 	rec, err := eventrecorder.Create(ctx, cfg, "composition-dynamic-controller", nil)
 	if err != nil {
-		log.Debug("Creating event recorder.", "error", err)
+		log.Error(err, "Creating event recorder.")
+		os.Exit(1)
 	}
 	pluralizer := pluralizer.New()
 
@@ -144,7 +148,8 @@ func main() {
 	} else {
 		pig, err = archive.Dynamic(cfg, pluralizer)
 		if err != nil {
-			log.Debug("Creating chart url info getter.", "error", err)
+			log.Error(err, "Creating chart url info getter.")
+			os.Exit(1)
 		}
 	}
 
@@ -158,7 +163,8 @@ func main() {
 	// Create a label requirement for the composition version
 	labelreq, err := labels.NewRequirement(compositionVersionLabel, selection.Equals, []string{*resourceVersion})
 	if err != nil {
-		log.Debug("Creating label requirement.", "error", err)
+		log.Error(err, "Creating label requirement.")
+		os.Exit(1)
 	}
 	labelselector := labels.NewSelector().Add(*labelreq)
 
@@ -209,6 +215,7 @@ func main() {
 
 	err = controller.Run(ctx, *workers)
 	if err != nil {
-		log.Debug("Running controller.", "error", err)
+		log.Error(err, "Running controller.")
+		os.Exit(1)
 	}
 }

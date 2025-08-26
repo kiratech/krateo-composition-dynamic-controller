@@ -623,9 +623,9 @@ func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryA
 			}
 
 			if len(v) > 0 {
-				log.Debug(fmt.Sprintf(format, v))
+				log.Info(fmt.Sprintf(format, v))
 			} else {
-				log.Debug(format)
+				log.Info(format)
 			}
 		},
 		RegistryAuth: (registryAuth),
