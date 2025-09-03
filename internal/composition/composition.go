@@ -223,6 +223,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		log.Debug("Performing helm chart update", "error", err)
 		return controller.ExternalObservation{}, err
 	}
+
 	modifiedResources := tracer.GetResources()
 	if len(modifiedResources) > 0 {
 		for _, resource := range modifiedResources {
@@ -371,7 +372,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 	setManagedResources(mg, managed)
-	h.logger.Debug("Composition created.", "package", pkg.URL)
+	log.Debug("Composition created.", "package", pkg.URL)
 
 	h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Composition created: %s", mg.GetName())))
 	err = setAvaibleStatus(mg, pkg, "Composition created", true)

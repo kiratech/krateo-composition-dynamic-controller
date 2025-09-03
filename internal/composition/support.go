@@ -19,6 +19,7 @@ type ManagedResource struct {
 	Resource   string `json:"resource"`
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
+	Path       string `json:"path"`
 }
 
 func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message string, force bool) error {
@@ -71,6 +72,7 @@ func setManagedResources(mg *unstructured.Unstructured, managed []interface{}) {
 		status = map[string]interface{}{}
 	}
 	mapstatus := status.(map[string]interface{})
+
 	mapstatus["managed"] = managed
 	mg.Object["status"] = mapstatus
 }
@@ -82,11 +84,30 @@ func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resourc
 		if err != nil {
 			return nil, fmt.Errorf("getting GVR for %s: %w", ref.String(), err)
 		}
+
+		buildpath := func() string {
+			prefix := "/apis/" + gvr.Group + "/" + gvr.Version
+			// Core group resources
+			if len(gvr.Group) == 0 {
+				prefix = "/api/" + gvr.Version
+			}
+
+			suffix := "/namespaces/" + ref.Namespace + "/" + gvr.Resource + "/" + ref.Name
+			// Cluster scoped resources
+			if len(ref.Namespace) == 0 {
+				suffix = "/" + gvr.Resource + "/" + ref.Name
+			}
+			if len(gvr.Group) == 0 {
+				return prefix + suffix
+			}
+			return prefix + suffix
+		}
 		managed = append(managed, ManagedResource{
 			APIVersion: ref.APIVersion,
 			Resource:   gvr.Resource,
 			Name:       ref.Name,
 			Namespace:  ref.Namespace,
+			Path:       buildpath(),
 		})
 	}
 
