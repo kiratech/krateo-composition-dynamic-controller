@@ -221,7 +221,7 @@ func TestRBACGen_Generate(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, policy)
-		assert.EqualError(t, err, "getting resources: some error")
+		assert.EqualError(t, err, "getting resources from chart-inspector: some error")
 		mockInspector.AssertExpectations(t)
 	})
 

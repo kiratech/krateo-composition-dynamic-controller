@@ -63,7 +63,7 @@ func (r *RBACGen) Generate(params Parameters) (*rbac.RBAC, error) {
 		CompositionDefinitionResource:  params.CompositionDefintionGVR.Resource,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getting resources: %w", err)
+		return nil, fmt.Errorf("getting resources from chart-inspector: %w", err)
 	}
 	policy := rbac.RBAC{
 		ClusterRole:        rbac.InitClusterRole(r.baseName),
