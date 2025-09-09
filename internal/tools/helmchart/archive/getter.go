@@ -213,8 +213,8 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	var password string
 	if passwordRef != nil {
 		password, err = GetSecret(context.Background(), g.dynamicClient, SecretKeySelector{
-			Name:      passwordRef["compositionDefinitionName"],
-			Namespace: passwordRef["compositionDefinitionNamespace"],
+			Name:      passwordRef["name"],
+			Namespace: passwordRef["namespace"],
 			Key:       passwordRef["key"],
 		})
 		if err != nil {
@@ -329,6 +329,7 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 			version := versionSplit[1]
 			if version == mg.GetLabels()[listwatcher.CompositionVersionLabel] && kind == mg.GetKind() {
 				compositionDefinition = &el
+				g.logger.Debug("Found matching composition definition", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace(), "gvr", gvr.String())
 				found = true
 				break
 			}
@@ -338,6 +339,8 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 				fmt.Errorf("too many definitions [%d] found for '%v' in namespace: %s", tot, gvr.String(), mg.GetNamespace())
 		}
 	}
+
+	g.logger.Debug("Using composition definition", "compositionDefinitionName", compositionDefinition.GetName(), "compositionDefinitionNamespace", compositionDefinition.GetNamespace(), "gvr", gvr.String())
 
 	return compositionDefinition, nil
 }
