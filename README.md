@@ -122,6 +122,8 @@ The `global.gracefullyPaused` value provides a way to gracefully pause both the 
 
 #### How to include the pause in a resource included in the chart
 
+##### For Krateo resources that support pausing via the `krateo.io/paused` annotation:
+
 To include the pause in a resource included in the chart, you can use the `krateo.io/paused` annotation on the resource. This will ensure that the resource is paused when the composition is paused.
 
 ```yaml
@@ -136,6 +138,52 @@ metadata:
 spec:
 ...
 ```
+
+##### For non-Krateo resources:
+> **NOTE:** Operators implemented without the Krateo runtime may handle "pause" semantics differently (different annotation keys, immediate vs. delayed behavior, or custom fields). Before templating a pause for a non‑Krateo controller, review that operator's API and controller behavior and adapt the Helm template to map `global.gracefullyPaused` to the operator's expected pause mechanism.
+
+
+This is an example of how to include the pause in a non-Krateo resource included in the chart. In this case, we use an ArgoCD Application as an example.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "github-scaffolding.labels" . | nindent 4 }}
+spec:
+  project: {{ .Values.argocd.application.project | default "default" }}
+  source:
+    repoURL: {{ include "github-scaffolding.toRepoUrl" . }}
+    targetRevision: {{ .Values.git.toRepo.branch }}
+    path: {{ .Values.argocd.application.source.path }}
+  destination:
+    server: {{ .Values.argocd.application.destination.server }}
+    namespace: {{ .Values.argocd.application.destination.namespace }}
+
+  {{- /* Normalize flags */ -}}
+  {{- $hasPaused   := and .Values.global (hasKey .Values.global "gracefullyPaused") -}}
+  {{- $paused      := and $hasPaused (eq (toString .Values.global.gracefullyPaused) "true") -}}
+  {{- $syncEnabled := default false .Values.argocd.application.syncEnabled -}}
+
+  {{- if $paused }}
+  syncPolicy: {}
+  {{- else if $syncEnabled }}
+  syncPolicy:
+    automated:
+      prune: {{ default false .Values.argocd.application.syncPolicy.automated.prune }}
+      selfHeal: {{ default false .Values.argocd.application.syncPolicy.automated.selfHeal }}
+    syncOptions:
+      - CreateNamespace=true
+  {{- else }}
+  syncPolicy: {}
+  {{- end }}
+```
+The composition-dynamic-controller injects a `global.gracefullyPaused` boolean into Helm release values after a successful upgrade. When `true`, chart templates can use this flag to disable automated behavior for non‑Krateo resources (for example emit `syncPolicy: {}` in an Argo CD Application) and to set `krateo.io/paused` on Krateo resources, ensuring a coordinated pause across the composition and all included resources.
+
+
 
 ## Configuration
 
