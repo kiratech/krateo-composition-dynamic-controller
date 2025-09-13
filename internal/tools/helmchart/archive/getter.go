@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/listwatcher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -327,7 +327,7 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 			}
 
 			version := versionSplit[1]
-			if version == mg.GetLabels()[listwatcher.CompositionVersionLabel] && kind == mg.GetKind() {
+			if version == mg.GetLabels()[meta.CompositionVersionLabel] && kind == mg.GetKind() {
 				compositionDefinition = &el
 				g.logger.Debug("Found matching composition definition", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace(), "gvr", gvr.String())
 				found = true

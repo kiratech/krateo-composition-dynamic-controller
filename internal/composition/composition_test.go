@@ -39,8 +39,6 @@ import (
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	memory "k8s.io/client-go/discovery/cached"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -172,20 +170,6 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			dyn, err := dynamic.NewForConfig(cfg.Client().RESTConfig())
-			if err != nil {
-				t.Error("Creating dynamic client.", "error", err)
-				return ctx
-			}
-
-			discovery, err := discovery.NewDiscoveryClientForConfig(cfg.Client().RESTConfig())
-			if err != nil {
-				t.Error("Creating discovery client.", "error", err)
-				return ctx
-			}
-
-			cachedDisc := memory.NewMemCacheClient(discovery)
-
 			rec, err := eventrecorder.Create(ctx, cfg.Client().RESTConfig(), "test", nil)
 			if err != nil {
 				t.Error("Creating event recorder.", "error", err)
@@ -194,7 +178,7 @@ func TestController(t *testing.T) {
 
 			chartInspector := chartinspector.NewChartInspector(chartInspectorUrl)
 			rbacgen := rbacgen.NewRBACGen("test-sa", altNamespace, &chartInspector)
-			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), dyn, cachedDisc, pluralizer, rbacgen)
+			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), pluralizer, rbacgen)
 
 			resli, err := decoder.DecodeAllFiles(ctx, os.DirFS(filepath.Join(testdataPath, "compositiondefinitions")), "*.yaml")
 			if err != nil {

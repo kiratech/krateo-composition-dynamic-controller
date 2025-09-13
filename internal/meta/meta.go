@@ -15,6 +15,7 @@ const (
 	CompositionDefinitionGroupLabel     = "krateo.io/composition-definition-group"
 	CompositionDefinitionVersionLabel   = "krateo.io/composition-definition-version"
 	CompositionDefinitionResourceLabel  = "krateo.io/composition-definition-resource"
+	CompositionVersionLabel             = "krateo.io/composition-version"
 
 	// ReleaseNameLabel is the label used to identify the release name of a Helm chart that can be different from the name of the resource.
 	ReleaseNameLabel = "krateo.io/release-name"

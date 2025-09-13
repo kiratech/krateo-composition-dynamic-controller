@@ -26,11 +26,8 @@ import (
 	"helm.sh/helm/v3/pkg/registry"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-
-	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 )
 
 var (
@@ -62,7 +59,13 @@ const (
 
 var _ controller.ExternalClient = (*handler)(nil)
 
-func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event event.APIRecorder, dyn dynamic.Interface, disc discovery.CachedDiscoveryInterface, pluralizer pluralizer.PluralizerInterface, rbacgen rbacgen.RBACGenInterface) controller.ExternalClient {
+func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event event.APIRecorder, pluralizer pluralizer.PluralizerInterface, rbacgen rbacgen.RBACGenInterface) controller.ExternalClient {
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Error(err, "Creating dynamic client.")
+		return nil
+	}
+
 	val, ok := os.LookupEnv(helmRegistryConfigPathEnvVar)
 	if ok {
 		helmRegistryConfigPath = val
@@ -76,7 +79,6 @@ func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event 
 		pluralizer:        pluralizer,
 		logger:            log,
 		dynamicClient:     dyn,
-		discoveryClient:   disc,
 		packageInfoGetter: pig,
 		eventRecorder:     event,
 	}
@@ -88,7 +90,6 @@ type handler struct {
 	logger            logging.Logger
 	pluralizer        pluralizer.PluralizerInterface
 	dynamicClient     dynamic.Interface
-	discoveryClient   discovery.CachedDiscoveryInterface
 	packageInfoGetter archive.Getter
 	eventRecorder     event.APIRecorder
 }
@@ -118,7 +119,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	meta.RemoveAnnotations(mg, compositionMeta.AnnotationKeyReconciliationGracefullyPausedTime)
 	mg, err := tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating composition", "error", err)
+		log.Error(err, "Updating cr with values")
 		return controller.ExternalObservation{}, fmt.Errorf("updating cr with values: %w", err)
 	}
 
@@ -127,7 +128,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
-		log.Debug("Getting package info", "error", err)
+		log.Error(err, "Getting package info")
 		return controller.ExternalObservation{}, err
 	}
 
@@ -139,19 +140,19 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	// This sets the labels for the composition definition and release name
 	mg, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr with values", "error", err)
+		log.Error(err, "Updating cr with values")
 		return controller.ExternalObservation{}, fmt.Errorf("updating cr with values: %w", err)
 	}
 
 	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
-		log.Debug("Getting helm client", "error", err)
+		log.Error(err, "Getting helm client")
 		return controller.ExternalObservation{}, err
 	}
 
 	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
-		log.Debug("Finding helm release", "error", err)
+		log.Error(err, "Finding helm release")
 		return controller.ExternalObservation{}, fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel == nil {
@@ -164,7 +165,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
 	if err != nil {
-		log.Debug("Converting GVK to GVR", "error", err)
+		log.Error(err, "Converting GVK to GVR")
 		return controller.ExternalObservation{}, fmt.Errorf("converting GVK to GVR: %w", err)
 	}
 	// Get Resources and generate RBAC
@@ -179,13 +180,13 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
 		})
 	if err != nil {
-		log.Debug("Generating RBAC using chart-inspector", "error", err)
+		log.Error(err, "Generating RBAC using chart-inspector")
 		return controller.ExternalObservation{}, err
 	}
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
 	err = rbInstaller.ApplyRBAC(generated)
 	if err != nil {
-		log.Debug("Installing RBAC", "error", err)
+		log.Error(err, "Installing RBAC")
 		return controller.ExternalObservation{}, err
 	}
 
@@ -194,7 +195,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return tracer.WithRoundTripper(rt)
 	})
 	if err != nil {
-		log.Debug("Getting helm client", "error", err)
+		log.Error(err, "Getting helm client")
 		return controller.ExternalObservation{}, err
 	}
 
@@ -220,7 +221,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 	upgradedRel, err := helmchart.Update(ctx, opts)
 	if err != nil {
-		log.Debug("Performing helm chart update", "error", err)
+		log.Error(err, "Performing helm chart update")
 		return controller.ExternalObservation{}, err
 	}
 
@@ -247,13 +248,13 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 	err = setAvaibleStatus(mg, pkg, "Composition up-to-date", false)
 	if err != nil {
-		log.Debug("Setting available status", "error", err)
+		log.Error(err, "Setting available status")
 		return controller.ExternalObservation{}, err
 	}
 
 	mg, err = tools.UpdateStatus(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr status with condition", "error", err, "condition", condition.Available())
+		log.Error(err, "Updating cr status with values")
 		return controller.ExternalObservation{}, err
 	}
 
@@ -286,22 +287,23 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	compositionMeta.SetReleaseName(mg, mg.GetName())
 	mg, err := tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr values", "error", err)
+		log.Error(err, "Updating cr with values")
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
 
 	if h.packageInfoGetter == nil {
+		log.Error(err, "helm chart package info getter must be specified")
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
-		log.Debug("Getting package info", "error", err)
-		return err
+		log.Error(err, "Getting package info")
+		return fmt.Errorf("getting package info: %w", err)
 	}
 	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
 	if err != nil {
-		log.Debug("Converting GVK to GVR", "error", err)
+		log.Error(err, "Converting GVK to GVR")
 		return fmt.Errorf("converting GVK to GVR: %w", err)
 	}
 	// Get Resources and generate RBAC
@@ -316,20 +318,20 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
 		})
 	if err != nil {
-		log.Debug("Generating RBAC using chart-inspector", "error", err)
+		log.Error(err, "Generating RBAC using chart-inspector")
 		return err
 	}
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
 	err = rbInstaller.ApplyRBAC(generated)
 	if err != nil {
-		log.Debug("Installing RBAC", "error", err)
+		log.Error(err, "Installing RBAC")
 		return err
 	}
 
 	// Install the helm chart
 	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
-		log.Debug("Getting helm client", "error", err)
+		log.Error(err, "Getting helm client")
 		return err
 	}
 
@@ -355,20 +357,20 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 
 	rel, _, err := helmchart.Install(ctx, opts)
 	if err != nil {
-		log.Debug("Installing helm chart", "package", pkg.URL, "error", err)
+		log.Error(err, "Installing helm chart", "package", pkg.URL)
 		return fmt.Errorf("installing helm chart: %w", err)
 	}
 	log.Debug("Installing composition package", "package", pkg.URL)
 
 	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
 	if err != nil {
-		log.Debug("Getting resources from release", "error", err)
+		log.Error(err, "Getting resources from release")
 		return fmt.Errorf("getting resources from release: %w", err)
 	}
 
 	managed, err := populateManagedResources(h.pluralizer, all)
 	if err != nil {
-		log.Debug("Populating managed resources", "error", err)
+		log.Error(err, "Populating managed resources")
 		return err
 	}
 	setManagedResources(mg, managed)
@@ -377,19 +379,19 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	h.eventRecorder.Event(mg, event.Normal(reasonCreated, "Create", fmt.Sprintf("Composition created: %s", mg.GetName())))
 	err = setAvaibleStatus(mg, pkg, "Composition created", true)
 	if err != nil {
-		log.Debug("Setting available status", "error", err)
+		log.Error(err, "Setting available status")
 		return err
 	}
 	mg, err = tools.UpdateStatus(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr status with values", "error", err)
+		log.Error(err, "Updating cr status with values")
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
 
 	meta.RemoveAnnotations(mg, compositionMeta.AnnotationKeyReconciliationGracefullyPausedTime)
 	_, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr with values", "error", err)
+		log.Error(err, "Updating cr with values")
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
 
@@ -422,14 +424,14 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
-		log.Debug("Getting package info", "error", err)
+		log.Error(err, "Getting package info")
 		return err
 	}
 
 	// Update the helm chart
 	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
-		log.Debug("Getting helm client", "error", err)
+		log.Error(err, "Getting helm client")
 		return err
 	}
 
@@ -440,13 +442,13 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
 	if err != nil {
-		log.Debug("Getting resources from release", "error", err)
+		log.Error(err, "Getting resources from release")
 		return fmt.Errorf("getting resources from release: %w", err)
 	}
 
 	managed, err := populateManagedResources(h.pluralizer, all)
 	if err != nil {
-		log.Debug("Populating managed resources", "error", err)
+		log.Error(err, "Populating managed resources")
 		return err
 	}
 	setManagedResources(mg, managed)
@@ -458,7 +460,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	if compositionMeta.IsGracefullyPaused(mg) {
 		err = setGracefullyPausedCondition(mg, pkg)
 		if err != nil {
-			log.Debug("Setting gracefully paused condition", "error", err)
+			log.Error(err, "Setting gracefully paused condition")
 			return err
 		}
 		mg, err = tools.UpdateStatus(ctx, mg, tools.UpdateOptions{
@@ -466,7 +468,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 			DynamicClient: h.dynamicClient,
 		})
 		if err != nil {
-			log.Debug("Updating cr status with values", "error", err)
+			log.Error(err, "Updating cr status with values")
 			return err
 		}
 
@@ -477,7 +479,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		// Normal behavior, set available status
 		err = setAvaibleStatus(mg, pkg, "Composition values updated.", true)
 		if err != nil {
-			log.Debug("Setting available status", "error", err)
+			log.Error(err, "Setting available status")
 			return err
 		}
 		mg, err = tools.UpdateStatus(ctx, mg, tools.UpdateOptions{
@@ -485,7 +487,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 			DynamicClient: h.dynamicClient,
 		})
 		if err != nil {
-			log.Debug("Updating cr status with values", "error", err)
+			log.Error(err, "Updating cr status with values")
 			return err
 		}
 
@@ -494,7 +496,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 
 	_, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr with values", "error", err)
+		log.Error(err, "Updating cr with values")
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
 	return nil
@@ -524,13 +526,13 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	hc, err := h.helmClientForResource(mg, nil)
 	if err != nil {
-		log.Debug("Getting helm client", "error", err)
+		log.Error(err, "Getting helm client")
 		return err
 	}
 
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
 	if err != nil {
-		log.Debug("Getting package info", "error", err)
+		log.Error(err, "Getting package info")
 		return err
 	}
 
@@ -555,15 +557,17 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	err = hc.UninstallRelease(&chartSpec)
 	if err != nil {
-		log.Debug("Uninstalling helm chart", "error", err)
+		log.Error(err, "Uninstalling helm chart", "package", pkg.URL)
+		return fmt.Errorf("uninstalling helm chart: %w", err)
 	}
 
 	rel, err = helmchart.FindAnyRelease(hc, meta.GetReleaseName(mg))
 	if err != nil {
+		log.Error(err, "Finding helm release")
 		return fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel != nil {
-		log.Debug("Composition not deleted.")
+		log.Error(err, "Composition not deleted, release still exists", "release", meta.GetReleaseName(mg))
 		return fmt.Errorf("composition not deleted, release %s still exists", meta.GetReleaseName(mg))
 	}
 
@@ -571,7 +575,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
 	if err != nil {
-		log.Debug("Converting GVK to GVR", "error", err)
+		log.Error(err, "Converting GVK to GVR")
 		return fmt.Errorf("converting GVK to GVR: %w", err)
 	}
 	// Get Resources and generate RBAC
@@ -588,7 +592,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	rbInstaller := rbac.NewRBACInstaller(h.dynamicClient)
 	err = rbInstaller.UninstallRBAC(generated)
 	if err != nil {
-		log.Debug("Uninstalling RBAC", "error", err)
+		log.Error(err, "Uninstalling RBAC")
 		return err
 	}
 
@@ -598,7 +602,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 
 	_, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
-		log.Debug("Updating cr with values", "error", err)
+		log.Error(err, "Updating cr with values")
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
 

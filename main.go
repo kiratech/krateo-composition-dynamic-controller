@@ -10,38 +10,35 @@ import (
 	"syscall"
 	"time"
 
-	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
-	"github.com/krateoplatformops/plumbing/kubeutil/event"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/builder"
 	ctrlevent "github.com/krateoplatformops/unstructured-runtime/pkg/controller/event"
-	metricsserver "github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
+	"github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 
 	"github.com/go-logr/logr"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/composition"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/plumbing/env"
+	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/plumbing/ptr"
 	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
-	genctrl "github.com/krateoplatformops/unstructured-runtime"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
+
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/workqueue"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/discovery/cached/memory"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
-	serviceName             = "composition-dynamic-controller"
-	compositionVersionLabel = "krateo.io/composition-version"
+	serviceName = "composition-dynamic-controller"
 )
 
 func main() {
@@ -73,6 +70,8 @@ func main() {
 		env.Duration("COMPOSITION_CONTROLLER_MAX_ERROR_RETRY_INTERVAL", 60*time.Second), "The maximum interval between retries when an error occurs. This should be less than the half of the poll interval.")
 	minErrorRetryInterval := flag.Duration("min-error-retry-interval",
 		env.Duration("COMPOSITION_CONTROLLER_MIN_ERROR_RETRY_INTERVAL", 1*time.Second), "The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval.")
+	maxErrorRetry := flag.Int("max-error-retries",
+		env.Int("COMPOSITION_CONTROLLER_MAX_ERROR_RETRIES", 5), "How many times to retry the processing of a resource when an error occurs before giving up and dropping the resource.")
 	metricsServerPort := flag.Int("metrics-server-port",
 		env.Int("COMPOSITION_CONTROLLER_METRICS_SERVER_PORT", 0), "The address to bind the metrics server to. If empty, metrics server is disabled.")
 
@@ -104,7 +103,7 @@ func main() {
 	if len(*kubeconfig) > 0 {
 		cfg, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	} else {
-		cfg, err = genctrl.GetConfig()
+		cfg, err = builder.GetConfig()
 	}
 	if err != nil {
 		log.Error(err, "Building kubeconfig.")
@@ -120,20 +119,6 @@ func main() {
 		syscall.SIGQUIT,
 	}...)
 	defer cancel()
-
-	dyn, err := dynamic.NewForConfig(cfg)
-	if err != nil {
-		log.Error(err, "Creating dynamic client.")
-		os.Exit(1)
-	}
-
-	discovery, err := discovery.NewDiscoveryClientForConfig(cfg)
-	if err != nil {
-		log.Error(err, "Creating discovery client.")
-		os.Exit(1)
-	}
-
-	cachedDisc := memory.NewMemCacheClient(discovery)
 
 	rec, err := eventrecorder.Create(ctx, cfg, "composition-dynamic-controller", nil)
 	if err != nil {
@@ -158,10 +143,16 @@ func main() {
 		WithValues("group", *resourceGroup).
 		WithValues("version", *resourceVersion).
 		WithValues("resource", *resourceName).
+		WithValues("namespace", *namespace).
+		WithValues("workers", *workers).
+		WithValues("minErrorRetryInterval", *minErrorRetryInterval).
+		WithValues("maxErrorRetryInterval", *maxErrorRetryInterval).
+		WithValues("maxErrorRetry", *maxErrorRetry).
+		WithValues("metricsServerPort", *metricsServerPort).
 		Info("Starting composition dynamic controller.")
 
 	// Create a label requirement for the composition version
-	labelreq, err := labels.NewRequirement(compositionVersionLabel, selection.Equals, []string{*resourceVersion})
+	labelreq, err := labels.NewRequirement(meta.CompositionVersionLabel, selection.Equals, []string{*resourceVersion})
 	if err != nil {
 		log.Error(err, "Creating label requirement.")
 		os.Exit(1)
@@ -170,47 +161,45 @@ func main() {
 
 	chartInspector := chartinspector.NewChartInspector(*urlChartInspector)
 	rbacgen := rbacgen.NewRBACGen(*saName, *saNamespace, &chartInspector)
-	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), dyn, cachedDisc, *pluralizer, rbacgen)
+	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), *pluralizer, rbacgen)
+
+	opts := []builder.FuncOption{
+		builder.WithLogger(log),
+		builder.WithNamespace(*namespace),
+		builder.WithResyncInterval(*resyncInterval),
+		builder.WithGlobalRateLimiter(workqueue.NewExponentialTimedFailureRateLimiter[any](*minErrorRetryInterval, *maxErrorRetryInterval)),
+		builder.WithMaxRetries(*maxErrorRetry),
+		builder.WithListWatcher(controller.ListWatcherConfiguration{
+			LabelSelector: ptr.To(labelselector.String()),
+		}),
+		builder.WithActionEvent(ctrlevent.CRUpdated, ctrlevent.Observe),
+	}
 
 	metricsServerBindAddress := ""
 	if ptr.Deref(metricsServerPort, 0) != 0 {
 		log.Info("Metrics server enabled", "bindAddress", fmt.Sprintf(":%d", *metricsServerPort))
 		metricsServerBindAddress = fmt.Sprintf(":%d", *metricsServerPort)
+		opts = append(opts, builder.WithMetrics(server.Options{
+			BindAddress: metricsServerBindAddress,
+		}))
 	} else {
 		log.Info("Metrics server disabled")
-		metricsServerBindAddress = "0"
 	}
 
-	controller := genctrl.New(ctx, genctrl.Options{
-		Discovery:      cachedDisc,
-		Client:         dyn,
-		ResyncInterval: *resyncInterval,
+	controller, err := builder.Build(ctx, builder.Configuration{
+		Config: cfg,
 		GVR: schema.GroupVersionResource{
 			Group:    *resourceGroup,
 			Version:  *resourceVersion,
 			Resource: *resourceName,
 		},
-		Namespace:    *namespace,
-		Config:       cfg,
-		Debug:        *debug,
-		Logger:       log,
 		ProviderName: serviceName,
-		ListWatcher: controller.ListWatcherConfiguration{
-			LabelSelector: ptr.To(labelselector.String()),
-		},
-		Pluralizer:        *pluralizer,
-		GlobalRateLimiter: workqueue.NewExponentialTimedFailureRateLimiter[any](*minErrorRetryInterval, *maxErrorRetryInterval),
-		Metrics: metricsserver.Options{
-			BindAddress: metricsServerBindAddress,
-		},
-		WatchAnnotations: ctrlevent.NewAnnotationEvents(
-			ctrlevent.AnnotationEvent{
-				EventType:  ctrlevent.Observe,
-				Annotation: compositionMeta.AnnotationKeyReconciliationGracefullyPaused,
-				OnAction:   ctrlevent.OnAny,
-			},
-		),
-	})
+	}, opts...)
+	if err != nil {
+		log.Error(err, "Creating controller.")
+		os.Exit(1)
+	}
+
 	controller.SetExternalClient(handler)
 
 	err = controller.Run(ctx, *workers)
