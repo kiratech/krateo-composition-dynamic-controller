@@ -1,7 +1,9 @@
 package getter
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -54,7 +56,7 @@ type ociGetter struct {
 	client *registry.Client
 }
 
-func (g *ociGetter) Get(opts GetOptions) ([]byte, string, error) {
+func (g *ociGetter) Get(opts GetOptions) (io.ReadCloser, string, error) {
 	if !isOCI(opts.URI) {
 		return nil, "", fmt.Errorf("uri '%s' is not a valid OCI ref", opts.URI)
 	}
@@ -93,7 +95,7 @@ func (g *ociGetter) Get(opts GetOptions) ([]byte, string, error) {
 		return nil, "", err
 	}
 
-	return result.Chart.Data, opts.URI, nil
+	return io.NopCloser(bytes.NewReader(result.Chart.Data)), opts.URI, nil
 }
 
 func (g *ociGetter) resolveURI(ref, version string) (*url.URL, error) {

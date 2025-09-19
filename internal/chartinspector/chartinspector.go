@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 type Resource struct {
@@ -100,6 +101,7 @@ func (c *ChartInspector) Resources(params Parameters) ([]Resource, error) {
 
 	req.URL.RawQuery = query.Encode()
 
+	c.httpClient.Timeout = 1 * time.Second
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("getting chartinspector: %w", err)
@@ -115,14 +117,30 @@ func (c *ChartInspector) Resources(params Parameters) ([]Resource, error) {
 
 	defer resp.Body.Close()
 
-	bbody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
+	dec := json.NewDecoder(resp.Body)
 
+	// If inspector returns an array: stream each element
 	var resources []Resource
-	if err := json.Unmarshal(bbody, &resources); err != nil {
-		return nil, fmt.Errorf("unmarshalling response body: %w", err)
+	// expect a JSON array
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("decoding chartinspector response: %w", err)
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+		// fall back to decode whole payload
+		if err := dec.Decode(&resources); err != nil {
+			return nil, fmt.Errorf("decoding chartinspector response: %w", err)
+		}
+	} else {
+		for dec.More() {
+			var r Resource
+			if err := dec.Decode(&r); err != nil {
+				return nil, fmt.Errorf("decoding chartinspector element: %w", err)
+			}
+			resources = append(resources, r)
+		}
+		// read closing ']'
+		_, _ = dec.Token()
 	}
 
 	return resources, nil

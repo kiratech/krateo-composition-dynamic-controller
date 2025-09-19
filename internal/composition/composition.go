@@ -163,6 +163,23 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}, nil
 	}
 
+	if rel.Info.Status.IsPending() {
+		log.Debug("Composition stuck install or upgrade in progress. Rolling back to previous release before re-attempting.")
+		// Rollback to previous release
+		err = hc.RollbackRelease(&helmclient.ChartSpec{
+			ReleaseName: meta.GetReleaseName(mg),
+			Namespace:   mg.GetNamespace(),
+			Repo:        pkg.Repo,
+			ChartName:   pkg.URL,
+			Version:     pkg.Version,
+			MaxHistory:  helmMaxHistory,
+		})
+		if err != nil {
+			log.Error(err, "Rolling back release")
+			return controller.ExternalObservation{}, fmt.Errorf("rolling back release: %w", err)
+		}
+	}
+
 	compositionGVR, err := h.pluralizer.GVKtoGVR(mg.GroupVersionKind())
 	if err != nil {
 		log.Error(err, "Converting GVK to GVR")

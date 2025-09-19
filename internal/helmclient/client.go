@@ -1046,7 +1046,7 @@ func (c *HelmClient) GetChartV2(spec *ChartInfo) (*chart.Chart, string, error) {
 		return nil, "", fmt.Errorf("failed to get chart %q: %w", spec.Url, err)
 	}
 
-	helmChart, err := loader.LoadArchive(bytes.NewReader(bChart))
+	helmChart, err := loader.LoadArchive(bChart)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1057,36 +1057,6 @@ func (c *HelmClient) GetChartV2(spec *ChartInfo) (*chart.Chart, string, error) {
 
 	return helmChart, chartPath, err
 }
-
-// // GetChart returns a chart matching the provided chart name and options.
-// func (c *HelmClient) GetChart(chartName string, chartPathOptions *action.ChartPathOptions) (*chart.Chart, string, error) {
-// 	loginOpts := c.buildLoginOpts()
-// 	if isOci(chartName) && len(loginOpts) > 0 {
-// 		ref := strings.TrimPrefix(chartName, "oci://")
-// 		host := strings.Split(ref, "/")[0]
-// 		err := c.ActionConfig.RegistryClient.Login(host, loginOpts...)
-// 		if err != nil {
-// 			return nil, "", fmt.Errorf("failed to login to registry %q: %w", host, err)
-// 		}
-// 		defer c.ActionConfig.RegistryClient.Logout(host)
-// 	}
-// 	chartPath, err := chartPathOptions.LocateChart(chartName, c.Settings)
-// 	if err != nil {
-// 		return nil, "", fmt.Errorf("failed to locate chart %q: %w", chartName, err)
-// 	}
-
-// 	helmChart, err := loader.Load(chartPath)
-// 	if err != nil {
-// 		return nil, "", err
-// 	}
-
-// 	if helmChart.Metadata.Deprecated {
-// 		c.DebugLog("WARNING: This chart (%q) is deprecated", helmChart.Metadata.Name)
-// 	}
-
-// 	return helmChart, chartPath, err
-
-// }
 
 // chartExists checks whether a chart is already installed
 // in a namespace or not based on the provided chart spec.

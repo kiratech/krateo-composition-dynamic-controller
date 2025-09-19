@@ -89,10 +89,10 @@ func (t *Tracer) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	//Dump the response to t.OutFile.
-	_, err = httputil.DumpResponse(resp, req.URL.Query().Get("watch") != "true")
-	if err != nil {
-		return nil, err
-	}
+	// _, err = httputil.DumpResponse(resp, req.URL.Query().Get("watch") != "true")
+	// if err != nil {
+	// 	return nil, err
+	// }
 	// if req.Method != http.MethodGet {
 	// 	t.outFile.Write(b)
 	// 	t.outFile.Write([]byte{'\n'})

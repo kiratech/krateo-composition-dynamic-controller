@@ -97,6 +97,7 @@ func main() {
 	)
 
 	log := logging.NewLogrLogger(logr.FromSlogHandler(slog.New(lh).Handler()))
+
 	// Kubernetes configuration
 	var cfg *rest.Config
 	var err error
