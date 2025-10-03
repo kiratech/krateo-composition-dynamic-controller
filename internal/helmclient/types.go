@@ -4,7 +4,10 @@ import (
 	"io"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -77,6 +80,17 @@ type RESTClientGetter struct {
 	namespace  string
 	kubeConfig []byte
 	restConfig *rest.Config
+
+	opts []RESTClientOption
+}
+
+// RESTClientGetter defines the values of a helm REST client.
+type CachedRESTClientGetter struct {
+	kubeConfig      []byte
+	restConfig      *rest.Config
+	discoveryClient discovery.CachedDiscoveryInterface
+	restMapper      meta.RESTMapper
+	namespaceConfig clientcmd.ClientConfig
 
 	opts []RESTClientOption
 }

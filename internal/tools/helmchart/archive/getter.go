@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
@@ -83,9 +82,6 @@ type staticGetter struct {
 }
 
 func (pig staticGetter) WithLogger(logger logging.Logger) Getter {
-	if logger == nil {
-		logger = logging.NewNopLogger()
-	}
 	return &staticGetter{
 		chartName: pig.chartName,
 	}
@@ -142,9 +138,9 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 			gvr.Resource = resource
 		}
 
-		name, _ := lbl[compositionMeta.CompositionDefinitionNameLabel]
+		name := lbl[compositionMeta.CompositionDefinitionNameLabel]
 
-		namespace, _ := lbl[compositionMeta.CompositionDefinitionNamespaceLabel]
+		namespace := lbl[compositionMeta.CompositionDefinitionNamespaceLabel]
 
 		if len(gvr.Group) > 0 && len(gvr.Resource) > 0 && len(gvr.Version) > 0 && len(name) > 0 && len(namespace) > 0 {
 			g.logger.Debug("Using labels to get composition definition", "compositionDefinitionName", name, "compositionDefinitionNamespace", namespace, "gvr", gvr.String())
@@ -159,7 +155,7 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	var compositionDefinition *unstructured.Unstructured
 
 	if cdInfo != nil {
-		g.logger.Debug("Getting composition definition", "compositionDefinitionName", cdInfo.Name, "compositionDefinitionNamespace", cdInfo.Namespace, "gvr", cdInfo.GVR.String())
+		g.logger.Debug("Getting composition definition", "compositionDefinitionName", cdInfo.Name, "compositionDefinitionNamespace", cdInfo.Namespace, "compositionDefinitionGVR", cdInfo.GVR.String())
 		compositionDefinition, err = g.dynamicClient.Resource(cdInfo.GVR).
 			Namespace(cdInfo.Namespace).
 			Get(context.Background(), cdInfo.Name, metav1.GetOptions{})
@@ -327,7 +323,7 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 			}
 
 			version := versionSplit[1]
-			if version == mg.GetLabels()[meta.CompositionVersionLabel] && kind == mg.GetKind() {
+			if version == mg.GetLabels()[compositionMeta.CompositionVersionLabel] && kind == mg.GetKind() {
 				compositionDefinition = &el
 				g.logger.Debug("Found matching composition definition", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace(), "gvr", gvr.String())
 				found = true

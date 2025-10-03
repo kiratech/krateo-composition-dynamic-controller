@@ -4,7 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,10 +19,8 @@ import (
 	"github.com/krateoplatformops/unstructured-runtime/pkg/metrics/server"
 
 	"github.com/go-logr/logr"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/composition"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/plumbing/env"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
@@ -81,6 +82,10 @@ func main() {
 	}
 
 	flag.Parse()
+
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 
 	logLevel := slog.LevelInfo
 	if *debug {
@@ -160,9 +165,7 @@ func main() {
 	}
 	labelselector := labels.NewSelector().Add(*labelreq)
 
-	chartInspector := chartinspector.NewChartInspector(*urlChartInspector)
-	rbacgen := rbacgen.NewRBACGen(*saName, *saNamespace, &chartInspector)
-	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), *pluralizer, rbacgen)
+	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), *pluralizer, *urlChartInspector, *saName, *saNamespace)
 
 	opts := []builder.FuncOption{
 		builder.WithLogger(log),

@@ -42,7 +42,10 @@ type ChartInspector struct {
 var _ ChartInspectorInterface = &ChartInspector{}
 
 func NewChartInspector(server string) ChartInspector {
-	return ChartInspector{server: server, httpClient: http.DefaultClient}
+	httpcli := http.DefaultClient
+	httpcli.Timeout = 20 * time.Second
+
+	return ChartInspector{server: server, httpClient: httpcli}
 }
 
 func (c *ChartInspector) WithHTTPClient(httpClient *http.Client) {

@@ -10,7 +10,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/golang/mock v1.6.0
 	github.com/krateoplatformops/plumbing v0.7.2
-	github.com/krateoplatformops/unstructured-runtime v0.2.7
+	github.com/krateoplatformops/unstructured-runtime v0.2.8
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/pflag v1.0.7
 	github.com/stretchr/testify v1.10.0

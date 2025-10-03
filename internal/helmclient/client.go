@@ -80,6 +80,14 @@ func NewClientFromRestConf(options *RestConfClientOptions) (Client, error) {
 	return newClient(options.Options, clientGetter, settings)
 }
 
+func NewCachedClientFromRestConf(options *RestConfClientOptions, clientset *CachedClients) (Client, error) {
+	settings := cli.New()
+
+	clientGetter := NewCachedRESTClientGetter(options.Namespace, nil, options.RestConfig, clientset)
+
+	return newClient(options.Options, clientGetter, settings)
+}
+
 // newClient is used by both NewClientFromKubeConf and NewClientFromRestConf
 // and returns a new Helm client via the provided options and REST config.
 func newClient(options *Options, clientGetter genericclioptions.RESTClientGetter, settings *cli.EnvSettings) (Client, error) {
@@ -1186,6 +1194,7 @@ func mergeInstallOptions(chartSpec *ChartSpec, installOptions *action.Install) {
 	installOptions.DryRun = chartSpec.DryRun
 	installOptions.SubNotes = chartSpec.SubNotes
 	installOptions.WaitForJobs = chartSpec.WaitForJobs
+	installOptions.DisableOpenAPIValidation = true
 }
 
 // mergeUpgradeOptions merges values of the provided chart to helm upgrade options used by the client.
@@ -1208,6 +1217,7 @@ func mergeUpgradeOptions(chartSpec *ChartSpec, upgradeOptions *action.Upgrade) {
 	upgradeOptions.SubNotes = chartSpec.SubNotes
 	upgradeOptions.WaitForJobs = chartSpec.WaitForJobs
 	upgradeOptions.Install = chartSpec.Install
+	upgradeOptions.DisableOpenAPIValidation = true
 }
 
 // mergeUninstallReleaseOptions merges values of the provided chart to helm uninstall options used by the client.
