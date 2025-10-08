@@ -35,7 +35,7 @@ var (
 	helmRegistryConfigPath = env.String(helmRegistryConfigPathEnvVar, helmclient.DefaultRegistryConfigPath)
 	krateoNamespace        = env.String(krateoNamespaceEnvVar, krateoNamespaceDefault)
 	helmRegistryConfigFile = filepath.Join(helmRegistryConfigPath, registry.CredentialsFileBasename)
-	helmMaxHistory         = env.Int(helmMaxHistoryEnvvar, 10)
+	helmMaxHistory         = env.Int(helmMaxHistoryEnvvar, 3)
 )
 
 const (
@@ -150,7 +150,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, fmt.Errorf("updating cr with values: %w", err)
 	}
 
-	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, _, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
 		log.Error(err, "Getting helm client")
 		return controller.ExternalObservation{}, err
@@ -217,7 +217,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 
 	tracer := &tracer.Tracer{}
-	hc, err = h.helmClientForResourceWithTransportWrapper(mg, pkg.RegistryAuth, func(rt http.RoundTripper) http.RoundTripper {
+	hc, _, err = h.helmClientForResourceWithTransportWrapper(mg, pkg.RegistryAuth, func(rt http.RoundTripper) http.RoundTripper {
 		return tracer.WithRoundTripper(rt)
 	})
 	if err != nil {
@@ -365,7 +365,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Install the helm chart
-	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, clientset, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
 		log.Error(err, "Getting helm client")
 		return err
@@ -398,7 +398,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	log.Debug("Installing composition package", "package", pkg.URL)
 
-	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
+	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace(), clientset)
 	if err != nil {
 		log.Error(err, "Getting resources from release")
 		return fmt.Errorf("getting resources from release: %w", err)
@@ -473,7 +473,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Update the helm chart
-	hc, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, clientset, err := h.helmClientForResource(mg, pkg.RegistryAuth)
 	if err != nil {
 		log.Error(err, "Getting helm client")
 		return err
@@ -484,7 +484,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return err
 	}
 
-	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace())
+	all, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace(), clientset)
 	if err != nil {
 		log.Error(err, "Getting resources from release")
 		return fmt.Errorf("getting resources from release: %w", err)
@@ -576,7 +576,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	hc, err := h.helmClientForResource(mg, nil)
+	hc, _, err := h.helmClientForResource(mg, nil)
 	if err != nil {
 		log.Error(err, "Getting helm client")
 		return err
@@ -667,7 +667,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	return nil
 }
 
-func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth) (helmclient.Client, error) {
+func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth) (helmclient.Client, helmclient.CachedClientsInterface, error) {
 	log := h.logger.WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
@@ -676,7 +676,7 @@ func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryA
 	clientSet, err := helmclient.NewCachedClients(h.kubeconfig)
 	if err != nil {
 		log.Error(err, "Creating cached helm client set.")
-		return nil, err
+		return nil, nil, err
 	}
 
 	opts := &helmclient.Options{
@@ -700,16 +700,17 @@ func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryA
 		RegistryAuth: (registryAuth),
 	}
 
-	return helmclient.NewCachedClientFromRestConf(
+	hc, err := helmclient.NewCachedClientFromRestConf(
 		&helmclient.RestConfClientOptions{
 			Options:    opts,
 			RestConfig: h.kubeconfig,
 		},
-		&clientSet,
+		clientSet,
 	)
+	return hc, clientSet, err
 }
 
-func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth, transportWrapper func(http.RoundTripper) http.RoundTripper) (helmclient.Client, error) {
+func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth, transportWrapper func(http.RoundTripper) http.RoundTripper) (helmclient.Client, helmclient.CachedClientsInterface, error) {
 	opts := &helmclient.Options{
 		Namespace:        mg.GetNamespace(),
 		RepositoryCache:  "/tmp/.helmcache",
@@ -723,17 +724,18 @@ func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Uns
 
 	clientSet, err := helmclient.NewCachedClients(h.kubeconfig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cfg := rest.CopyConfig(h.kubeconfig)
 	cfg.WrapTransport = transportWrapper
 
-	return helmclient.NewCachedClientFromRestConf(
+	hc, err := helmclient.NewCachedClientFromRestConf(
 		&helmclient.RestConfClientOptions{
 			Options:    opts,
 			RestConfig: cfg,
 		},
-		&clientSet,
+		clientSet,
 	)
+	return hc, clientSet, err
 }

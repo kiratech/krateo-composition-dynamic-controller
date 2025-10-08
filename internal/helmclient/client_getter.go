@@ -78,19 +78,26 @@ func (c *RESTClientGetter) ToRawKubeConfigLoader() clientcmd.ClientConfig {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
 }
 
-type CachedClients struct {
+type CachedClientsInterface interface {
+	DiscoveryClient() discovery.CachedDiscoveryInterface
+	RESTMapper() meta.RESTMapper
+}
+
+var _ CachedClientsInterface = &cachedClients{}
+
+type cachedClients struct {
 	discoveryClient discovery.CachedDiscoveryInterface
 	_RESTMapper     meta.RESTMapper
 }
 
-func NewCachedClients(cfg *rest.Config) (CachedClients, error) {
+func NewCachedClients(cfg *rest.Config) (CachedClientsInterface, error) {
 	dir, err := os.MkdirTemp("", "helmclient")
 	if err != nil {
-		return CachedClients{}, err
+		return cachedClients{}, err
 	}
 	cachedDiscovery, err := disk.NewCachedDiscoveryClientForConfig(cfg, dir, "", 0)
 	if err != nil {
-		return CachedClients{}, err
+		return cachedClients{}, err
 	}
 
 	cachedDiscovery.Invalidate()
@@ -99,10 +106,18 @@ func NewCachedClients(cfg *rest.Config) (CachedClients, error) {
 	mapper.Reset()
 	expander := restmapper.NewShortcutExpander(mapper, cachedDiscovery, nil)
 
-	return CachedClients{
+	return cachedClients{
 		discoveryClient: cachedDiscovery,
 		_RESTMapper:     expander,
 	}, nil
+}
+
+func (c cachedClients) DiscoveryClient() discovery.CachedDiscoveryInterface {
+	return c.discoveryClient
+}
+
+func (c cachedClients) RESTMapper() meta.RESTMapper {
+	return c._RESTMapper
 }
 
 var _ clientcmd.ClientConfig = &namespaceClientConfig{}
@@ -129,12 +144,12 @@ func (c namespaceClientConfig) ConfigAccess() clientcmd.ConfigAccess {
 
 // NewCachedRESTClientGetter returns a RESTClientGetter using the provided 'namespace', 'kubeConfig', and 'restConfig',
 // and uses cached clients for discovery and REST mapping to improve performance and reduce API server load.
-func NewCachedRESTClientGetter(namespace string, kubeConfig []byte, restConfig *rest.Config, clients *CachedClients, opts ...RESTClientOption) *CachedRESTClientGetter {
+func NewCachedRESTClientGetter(namespace string, kubeConfig []byte, restConfig *rest.Config, clients CachedClientsInterface, opts ...RESTClientOption) *CachedRESTClientGetter {
 	return &CachedRESTClientGetter{
 		kubeConfig:      kubeConfig,
 		restConfig:      restConfig,
-		discoveryClient: clients.discoveryClient,
-		restMapper:      clients._RESTMapper,
+		discoveryClient: clients.DiscoveryClient(),
+		restMapper:      clients.RESTMapper(),
 		namespaceConfig: &namespaceClientConfig{namespace: namespace},
 		opts:            opts,
 	}

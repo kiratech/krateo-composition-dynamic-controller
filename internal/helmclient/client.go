@@ -80,7 +80,7 @@ func NewClientFromRestConf(options *RestConfClientOptions) (Client, error) {
 	return newClient(options.Options, clientGetter, settings)
 }
 
-func NewCachedClientFromRestConf(options *RestConfClientOptions, clientset *CachedClients) (Client, error) {
+func NewCachedClientFromRestConf(options *RestConfClientOptions, clientset CachedClientsInterface) (Client, error) {
 	settings := cli.New()
 
 	clientGetter := NewCachedRESTClientGetter(options.Namespace, nil, options.RestConfig, clientset)

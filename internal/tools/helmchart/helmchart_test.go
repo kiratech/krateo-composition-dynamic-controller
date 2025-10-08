@@ -36,52 +36,52 @@ func ExampleExtractValuesFromSpec() {
 	//   like: false
 }
 
-func TestRenderTemplate(t *testing.T) {
-	f := features.New("RenderTemplate").
-		Setup(e2e.Logger("test")).
-		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			return ctx
-		}).Assess("RenderTemplate", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+// func TestRenderTemplate(t *testing.T) {
+// 	f := features.New("RenderTemplate").
+// 		Setup(e2e.Logger("test")).
+// 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+// 			return ctx
+// 		}).Assess("RenderTemplate", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 
-		helmClient, err := helmclient.NewClientFromRestConf(&helmclient.RestConfClientOptions{
-			RestConfig: cfg.Client().RESTConfig(),
-			Options: &helmclient.Options{
-				Namespace: namespace,
-			},
-		})
-		if err != nil {
-			t.Fatalf("failed to create helm client: %v", err)
-		}
+// 		helmClient, err := helmclient.NewClientFromRestConf(&helmclient.RestConfClientOptions{
+// 			RestConfig: cfg.Client().RESTConfig(),
+// 			Options: &helmclient.Options{
+// 				Namespace: namespace,
+// 			},
+// 		})
+// 		if err != nil {
+// 			t.Fatalf("failed to create helm client: %v", err)
+// 		}
 
-		res := createDummyResource()
+// 		res := createDummyResource()
 
-		opts := RenderTemplateOptions{
-			PackageUrl:     "oci://registry-1.docker.io/bitnamicharts/postgresql",
-			PackageVersion: "12.8.3",
-			HelmClient:     helmClient,
-			Resource:       res,
-		}
+// 		opts := RenderTemplateOptions{
+// 			PackageUrl:     "oci://registry-1.docker.io/bitnamicharts/postgresql",
+// 			PackageVersion: "12.8.3",
+// 			HelmClient:     helmClient,
+// 			Resource:       res,
+// 		}
 
-		_, all, err := RenderTemplate(ctx, opts)
-		if err != nil {
-			t.Fatalf("RenderTemplate failed: %v", err)
-		}
+// 		_, all, err := RenderTemplate(ctx, opts)
+// 		if err != nil {
+// 			t.Fatalf("RenderTemplate failed: %v", err)
+// 		}
 
-		assert.Equal(t, "v1", all[0].APIVersion)
-		assert.Equal(t, "Secret", all[0].Kind)
-		assert.Equal(t, "demo-postgresql", all[0].Name)
-		assert.Equal(t, "demo-system", all[0].Namespace)
+// 		assert.Equal(t, "v1", all[0].APIVersion)
+// 		assert.Equal(t, "Secret", all[0].Kind)
+// 		assert.Equal(t, "demo-postgresql", all[0].Name)
+// 		assert.Equal(t, "demo-system", all[0].Namespace)
 
-		assert.Equal(t, "v1", all[1].APIVersion)
-		assert.Equal(t, "Service", all[1].Kind)
-		assert.Equal(t, "demo-postgresql-hl", all[1].Name)
-		assert.Equal(t, "demo-system", all[1].Namespace)
+// 		assert.Equal(t, "v1", all[1].APIVersion)
+// 		assert.Equal(t, "Service", all[1].Kind)
+// 		assert.Equal(t, "demo-postgresql-hl", all[1].Name)
+// 		assert.Equal(t, "demo-system", all[1].Namespace)
 
-		return ctx
-	}).Feature()
+// 		return ctx
+// 	}).Feature()
 
-	testenv.Test(t, f)
-}
+// 	testenv.Test(t, f)
+// }
 
 func TestFindRelease(t *testing.T) {
 	f := features.New("FindRelease").

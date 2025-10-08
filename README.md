@@ -205,7 +205,7 @@ These enviroment varibles can be changed in the Deployment of the composition-dy
 | URL_CHART_INSPECTOR                    | url to chart inspector   |  `http://chart-inspector.krateo-system.svc.cluster.local:8081/`             |   
 | KRATEO_NAMESPACE                       | namespace where krateo is installed       |  krateo-system |
 | HELM_REGISTRY_CONFIG_PATH | default helm config path | /tmp |
-| HELM_MAX_HISTORY | Max Helm History | 10 |
+| HELM_MAX_HISTORY | Max Helm History | 3 |
 | COMPOSITION_CONTROLLER_MAX_ERROR_RETRY_INTERVAL | The maximum interval between retries when an error occurs. This should be less than the half of the poll interval. |  0m |
 | COMPOSITION_CONTROLLER_MIN_ERROR_RETRY_INTERVAL | The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval. | 1m |
 | COMPOSITION_CONTROLLER_METRICS_SERVER_PORT | The port where the metrics server will be listening. If not set, the metrics server is disabled. |  |

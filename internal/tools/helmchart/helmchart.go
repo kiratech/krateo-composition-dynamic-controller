@@ -6,13 +6,14 @@ import (
 	"io"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+
 	"github.com/krateoplatformops/plumbing/maps"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
@@ -84,39 +85,7 @@ type RenderTemplateOptions struct {
 	Pluralizer     pluralizer.PluralizerInterface
 }
 
-func RenderTemplate(ctx context.Context, opts RenderTemplateOptions) (*release.Release, []objectref.ObjectRef, error) {
-	dat, err := ExtractValuesFromSpec(opts.Resource)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	chartSpec := helmclient.ChartSpec{
-		ReleaseName: meta.GetReleaseName(opts.Resource),
-		Namespace:   opts.Resource.GetNamespace(),
-		ChartName:   opts.PackageUrl,
-		Version:     opts.PackageVersion,
-		ValuesYaml:  string(dat),
-		Repo:        opts.Repo,
-	}
-	if opts.Credentials != nil {
-		chartSpec.Username = opts.Credentials.Username
-		chartSpec.Password = opts.Credentials.Password
-	}
-
-	rel, err := opts.HelmClient.TemplateChartRaw(&chartSpec, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	all, err := GetResourcesRefFromRelease(rel, opts.Resource.GetNamespace())
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get resources from release: %w", err)
-	}
-
-	return rel, all, nil
-}
-
-func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string) ([]objectref.ObjectRef, error) {
+func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, clientset helmclient.CachedClientsInterface) ([]objectref.ObjectRef, error) {
 	// build an io.Reader that streams manifest + hooks without concatenating into a single []byte
 	var readers []io.Reader
 	if rel != nil {
@@ -159,6 +128,16 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string) (
 
 		if namespace == "" {
 			namespace = defaultNamespace
+
+			// Check if the resource is cluster-scoped
+			gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
+			mapping, err := clientset.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get REST mapping for %s: %w", gvk.String(), err)
+			}
+			if mapping.Scope.Name() == meta.RESTScopeNameRoot {
+				namespace = ""
+			}
 		}
 		// skip helm hooks if present
 		if hook != "" {
@@ -203,7 +182,6 @@ func CheckResource(ctx context.Context, ref objectref.ObjectRef, opts CheckResou
 		un, err = opts.DynamicClient.Resource(gvr).
 			Get(ctx, ref.Name, metav1.GetOptions{})
 	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -236,9 +214,7 @@ func FindAllReleases(hc helmclient.Client) ([]*release.Release, error) {
 	}
 
 	res := make([]*release.Release, 0, len(all))
-	for _, el := range all {
-		res = append(res, el)
-	}
+	res = append(res, all...)
 
 	return res, nil
 }
