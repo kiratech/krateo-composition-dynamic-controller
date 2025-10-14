@@ -13,6 +13,7 @@ import (
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/hasher"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -85,7 +86,9 @@ type RenderTemplateOptions struct {
 	Pluralizer     pluralizer.PluralizerInterface
 }
 
-func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, clientset helmclient.CachedClientsInterface) ([]objectref.ObjectRef, error) {
+func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, clientset helmclient.CachedClientsInterface) ([]objectref.ObjectRef, string, error) {
+
+	var hasher = hasher.NewFNVObjectHash()
 	// build an io.Reader that streams manifest + hooks without concatenating into a single []byte
 	var readers []io.Reader
 	if rel != nil {
@@ -101,13 +104,13 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 
 	all := []objectref.ObjectRef{}
 	if len(readers) == 0 {
-		return all, nil
+		return all, "", nil
 	}
 
 	combined := io.MultiReader(readers...)
 	decoder := yamlutil.NewYAMLOrJSONDecoder(combined, 4096)
 	for {
-		var doc map[string]interface{}
+		var doc map[string]any
 		if err := decoder.Decode(&doc); err != nil {
 			if err == io.EOF {
 				break
@@ -133,7 +136,7 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 			gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
 			mapping, err := clientset.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get REST mapping for %s: %w", gvk.String(), err)
+				return nil, "", fmt.Errorf("failed to get REST mapping for %s: %w", gvk.String(), err)
 			}
 			if mapping.Scope.Name() == meta.RESTScopeNameRoot {
 				namespace = ""
@@ -159,8 +162,10 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 		name = ""
 		namespace = ""
 		hook = ""
+
+		hasher.SumHash(doc)
 	}
-	return all, nil
+	return all, hasher.GetHash(), nil
 }
 
 type CheckResourceOptions struct {

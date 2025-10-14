@@ -137,6 +137,12 @@ spec:
                 type: string
               helmChartVersion:
                 type: string
+              digest:
+                type: string
+                default: ""
+              previousDigest:
+                type: string
+                default: ""
               managed:
                 items:
                   properties:

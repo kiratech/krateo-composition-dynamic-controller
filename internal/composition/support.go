@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	compositionCondition "github.com/krateoplatformops/composition-dynamic-controller/internal/condition"
+	"github.com/krateoplatformops/plumbing/maps"
 
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
@@ -22,14 +22,7 @@ type ManagedResource struct {
 	Path       string `json:"path"`
 }
 
-func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message string, force bool) error {
-	if pkg == nil {
-		return fmt.Errorf("package info is nil")
-	}
-
-	unstructured.SetNestedField(mg.Object, pkg.Version, "status", "helmChartVersion")
-	unstructured.SetNestedField(mg.Object, pkg.URL, "status", "helmChartUrl")
-
+func setAvaibleStatus(mg *unstructured.Unstructured, message string, force bool) error {
 	if !force {
 		currentCondition := unstructuredtools.GetCondition(mg, condition.Available().Type, condition.Available().Reason)
 
@@ -47,16 +40,15 @@ func setAvaibleStatus(mg *unstructured.Unstructured, pkg *archive.Info, message 
 	return nil
 }
 
-func setGracefullyPausedCondition(mg *unstructured.Unstructured, pkg *archive.Info) error {
-	if pkg == nil {
-		return fmt.Errorf("package info is nil")
+func setGracefullyPausedCondition(mg *unstructured.Unstructured, force bool) error {
+	if !force {
+		currentCondition := unstructuredtools.GetCondition(mg, compositionCondition.ReconcileGracefullyPaused().Type, compositionCondition.ReconcileGracefullyPaused().Reason)
+
+		if currentCondition != nil && currentCondition.Message == "Composition is gracefully paused." {
+			return nil
+		}
 	}
 
-	currentCondition := unstructuredtools.GetCondition(mg, compositionCondition.ReconcileGracefullyPaused().Type, compositionCondition.ReconcileGracefullyPaused().Reason)
-
-	if currentCondition != nil && currentCondition.Message == "Composition is gracefully paused." {
-		return nil
-	}
 	cond := compositionCondition.ReconcileGracefullyPaused()
 	cond.Message = "Composition is gracefully paused."
 	err := unstructuredtools.SetConditions(mg, cond)
@@ -66,7 +58,69 @@ func setGracefullyPausedCondition(mg *unstructured.Unstructured, pkg *archive.In
 	return nil
 }
 
-func setManagedResources(mg *unstructured.Unstructured, managed []interface{}) {
+type ConditionType string
+
+const (
+	ConditionTypeAvailable                 ConditionType = "Available"
+	ConditionTypeReconcileGracefullyPaused ConditionType = "ReconcileGracefullyPaused"
+)
+
+type statusManagerOpts struct {
+	force          bool
+	pluralizer     pluralizer.PluralizerInterface
+	chartURL       string
+	chartVersion   string
+	resources      []objectref.ObjectRef
+	previousDigest string
+	digest         string
+	message        string
+	conditionType  ConditionType
+}
+
+func setStatus(mg *unstructured.Unstructured, opts *statusManagerOpts) error {
+	if opts == nil {
+		return fmt.Errorf("status manager options are nil")
+	}
+
+	if len(opts.resources) > 0 {
+		managed, err := populateManagedResources(opts.pluralizer, opts.resources)
+		if err != nil {
+			return fmt.Errorf("populating managed resources: %w", err)
+		}
+
+		setManagedResources(mg, managed)
+	}
+
+	err := maps.SetNestedField(mg.Object, opts.previousDigest, "status", "previousDigest")
+	if err != nil {
+		return fmt.Errorf("setting previous digest in status: %w", err)
+	}
+
+	err = maps.SetNestedField(mg.Object, opts.digest, "status", "digest")
+	if err != nil {
+		return fmt.Errorf("setting digest in status: %w", err)
+	}
+
+	err = maps.SetNestedField(mg.Object, opts.chartURL, "status", "helmChartUrl")
+	if err != nil {
+		return fmt.Errorf("setting chart URL in status: %w", err)
+	}
+
+	err = maps.SetNestedField(mg.Object, opts.chartVersion, "status", "helmChartVersion")
+	if err != nil {
+		return fmt.Errorf("setting chart version in status: %w", err)
+	}
+
+	switch opts.conditionType {
+	case ConditionTypeReconcileGracefullyPaused:
+		return setGracefullyPausedCondition(mg, opts.force)
+	case ConditionTypeAvailable:
+		return setAvaibleStatus(mg, opts.message, opts.force)
+	}
+	return fmt.Errorf("unknown condition type: %s", opts.conditionType)
+}
+
+func setManagedResources(mg *unstructured.Unstructured, managed []any) {
 	status := mg.Object["status"]
 	if status == nil {
 		status = map[string]interface{}{}
@@ -77,7 +131,7 @@ func setManagedResources(mg *unstructured.Unstructured, managed []interface{}) {
 	mg.Object["status"] = mapstatus
 }
 
-func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resources []objectref.ObjectRef) ([]interface{}, error) {
+func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resources []objectref.ObjectRef) ([]any, error) {
 	var managed []interface{}
 	for _, ref := range resources {
 		gvr, err := pluralizer.GVKtoGVR(schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind))
