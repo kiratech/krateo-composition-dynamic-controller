@@ -104,7 +104,6 @@ func (c *ChartInspector) Resources(params Parameters) ([]Resource, error) {
 
 	req.URL.RawQuery = query.Encode()
 
-	c.httpClient.Timeout = 1 * time.Second
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("getting chartinspector: %w", err)
