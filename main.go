@@ -165,7 +165,7 @@ func main() {
 	}
 	labelselector := labels.NewSelector().Add(*labelreq)
 
-	handler := composition.NewHandler(cfg, log, pig, *event.NewAPIRecorder(rec), *pluralizer, *urlChartInspector, *saName, *saNamespace)
+	handler := composition.NewHandler(cfg, pig, *event.NewAPIRecorder(rec), *pluralizer, *urlChartInspector, *saName, *saNamespace)
 
 	opts := []builder.FuncOption{
 		builder.WithLogger(log),

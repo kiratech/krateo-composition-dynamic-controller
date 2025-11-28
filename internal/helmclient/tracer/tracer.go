@@ -1,9 +1,12 @@
 package tracer
 
 import (
+	"context"
+	"io"
 	"net/http"
-	"net/http/httputil"
 	"strings"
+
+	xcontext "github.com/krateoplatformops/unstructured-runtime/pkg/context"
 )
 
 type Resource struct {
@@ -20,6 +23,15 @@ type Resource struct {
 type Tracer struct {
 	http.RoundTripper
 	resources []Resource
+	verbose   bool
+	context   context.Context
+}
+
+func NewTracer(ctx context.Context, verbose bool) *Tracer {
+	return &Tracer{
+		verbose: verbose,
+		context: ctx,
+	}
 }
 
 func (t *Tracer) WithRoundTripper(rt http.RoundTripper) *Tracer {
@@ -31,14 +43,25 @@ func (t *Tracer) GetResources() []Resource {
 	return t.resources
 }
 
-// RoundTrip calls the nested RoundTripper while printing each request and
-// response/error to t.OutFile on either side of the nested call.  WARNING: this
-// may output sensitive information including bearer tokens.
-func (t *Tracer) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Dump the request to t.OutFile.
-	_, err := httputil.DumpRequestOut(req, true)
+// RoundTrip implements the http.RoundTripper interface.
+// It dumps each request different from GET and its response using the context logger provided.
+func (t *Tracer) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+
+	reqBody := ""
+	if t.verbose && req.Body != nil { // We need to read the body to log it because t.RoundTripper.RoundTrip may consume it.
+		b, err := io.ReadAll(req.Body)
+		if err == nil {
+			reqBody = string(b)
+			// Reconstruct the Body since it was read.
+			req.Body = io.NopCloser(strings.NewReader(reqBody))
+		}
+	}
+
+	// Call the nested RoundTripper.
+	resp, err = t.RoundTripper.RoundTrip(req)
+	// If an error was returned, dump it to t.OutFile.
 	if err != nil {
-		return nil, err
+		return resp, err
 	}
 	if req.Method != http.MethodGet && req.URL.Query().Get("fieldManager") != "" {
 		split := strings.Split(req.URL.Path, "/")
@@ -78,25 +101,31 @@ func (t *Tracer) RoundTrip(req *http.Request) (*http.Response, error) {
 				})
 			}
 		}
-	}
 
-	// Call the nested RoundTripper.
-	resp, err := t.RoundTripper.RoundTrip(req)
-	// If an error was returned, dump it to t.OutFile.
-	if err != nil {
-		// fmt.Fprintln(t.OutFile, err)
-		return resp, err
-	}
+		if t.verbose && t.context != nil {
+			log := xcontext.Logger(t.context).WithValues("op", "http-tracer")
+			respBody := ""
+			if resp.Body != nil {
+				b, err := io.ReadAll(resp.Body)
+				if err == nil {
+					respBody = string(b)
+					// Reconstruct the Body since it was read.
+					resp.Body = io.NopCloser(strings.NewReader(respBody))
+				}
+			}
 
-	//Dump the response to t.OutFile.
-	// _, err = httputil.DumpResponse(resp, req.URL.Query().Get("watch") != "true")
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if req.Method != http.MethodGet {
-	// 	t.outFile.Write(b)
-	// 	t.outFile.Write([]byte{'\n'})
-	// }
+			log.WithValues("method", req.Method).
+				WithValues("url", req.URL.String()).
+				WithValues("content-type", req.Header.Get("Content-Type")).
+				WithValues("content-length", req.Header.Get("Content-Length")).
+				WithValues("accept-encoding", req.Header.Get("Accept")).
+				WithValues("authorization", "redacted").
+				WithValues("requestBody", reqBody).
+				WithValues("responseStatus", resp.Status).
+				WithValues("responseBody", respBody).
+				Debug("HTTP Request traced")
+		}
+	}
 
 	return resp, err
 }

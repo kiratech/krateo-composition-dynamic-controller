@@ -1,10 +1,13 @@
 package meta
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -401,5 +404,104 @@ func TestGetGracefullyPausedTime(t *testing.T) {
 				t.Errorf("GetGracefullyPausedTime() time = %v, want %v", resultTime, tt.expectedTime)
 			}
 		})
+	}
+}
+func TestCalculateReleaseName_Deterministic(t *testing.T) {
+	obj := unstructured.Unstructured{}
+	obj.SetName("my-resource")
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "test.group",
+		Version: "v1",
+		Kind:    "MyKind",
+	})
+	obj.SetUID(types.UID("5a47edd9-c710-4b4b-b5ea-b6cdf9fc1f58"))
+
+	r1 := CalculateReleaseName(&obj)
+	r2 := CalculateReleaseName(&obj)
+	fmt.Println(r1)
+	fmt.Println(r2)
+
+	if r1 == "" {
+		t.Fatalf("CalculateReleaseName returned empty string")
+	}
+	if r1 != r2 {
+		t.Fatalf("CalculateReleaseName not deterministic: %q vs %q", r1, r2)
+	}
+	if !strings.HasPrefix(r1, "my-resource-") {
+		t.Fatalf("CalculateReleaseName result %q does not have expected prefix %q", r1, "my-resource-")
+	}
+}
+
+func TestCalculateReleaseName_DifferentGVKProducesDifferentHash(t *testing.T) {
+	name := "same-name"
+
+	obj1 := unstructured.Unstructured{}
+	obj1.SetName(name)
+	obj1.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "group.one",
+		Version: "v1",
+		Kind:    "KindA",
+	})
+	obj1.SetUID(types.UID("5a47edd9-c710-4b4b-b5ea-b6cdf9fc1f58"))
+
+	obj2 := unstructured.Unstructured{}
+	obj2.SetName(name)
+	obj2.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "group.two",
+		Version: "v1",
+		Kind:    "KindA",
+	})
+	obj2.SetUID(types.UID("b3d6f4e2-1c2d-4e5f-9a6b-7c8d9e0f1a2b"))
+
+	r1 := CalculateReleaseName(&obj1)
+	r2 := CalculateReleaseName(&obj2)
+
+	if r1 == r2 {
+		t.Fatalf("Expected different release names for different GVKs but got same: %q", r1)
+	}
+}
+
+func TestCalculateReleaseName_NameIncludedAndUniqueForDifferentNames(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "example.io", Version: "v1", Kind: "Example"}
+	objA := unstructured.Unstructured{}
+	objA.SetName("alpha")
+	objA.SetGroupVersionKind(gvk)
+	objA.SetUID(types.UID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+
+	objB := unstructured.Unstructured{}
+	objB.SetName("beta")
+	objB.SetGroupVersionKind(gvk)
+	objB.SetUID(types.UID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+
+	ra := CalculateReleaseName(&objA)
+	rb := CalculateReleaseName(&objB)
+
+	if !strings.HasPrefix(ra, "alpha-") {
+		t.Fatalf("Release name %q does not start with expected prefix %q", ra, "alpha-")
+	}
+	if !strings.HasPrefix(rb, "beta-") {
+		t.Fatalf("Release name %q does not start with expected prefix %q", rb, "beta-")
+	}
+	if ra == rb {
+		t.Fatalf("Expected different release names for different resource names but got same: %q", ra)
+	}
+}
+
+func TestCalculateReleaseName_UIDNotFound(t *testing.T) {
+	obj := unstructured.Unstructured{}
+	obj.SetName("no-uid-resource")
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "test.group",
+		Version: "v1",
+		Kind:    "NoUIDKind",
+	})
+	// Not setting UID
+
+	releaseName := CalculateReleaseName(&obj)
+
+	fmt.Println(releaseName)
+
+	if !strings.HasPrefix(releaseName, "no-uid-resource-") {
+		t.Fatalf("CalculateReleaseName result %q does not have expected prefix %q", releaseName, "no-uid-resource-")
 	}
 }

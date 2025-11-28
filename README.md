@@ -3,11 +3,23 @@ The composition-dynamic-controller is an operator that is instantiated by the [c
 
 ## Summary
 
-- [Summary](#summary)
-- [Architecture](#architecture)
-- [Overview](#overview)
-- [Examples](#examples)
-- [Configuration](#configuration)
+- [Composition Dynamic Controller](#composition-dynamic-controller)
+  - [Summary](#summary)
+  - [Architecture](#architecture)
+  - [Workflow](#workflow)
+    - [Composition Dynamic Controller (CDC) \& Chart Inspector: Secure Helm Lifecycle Management](#composition-dynamic-controller-cdc--chart-inspector-secure-helm-lifecycle-management)
+      - [Core CDC Workflow (with Chart Inspector Integration)](#core-cdc-workflow-with-chart-inspector-integration)
+    - [Key Capabilities Enabled by This Collaboration](#key-capabilities-enabled-by-this-collaboration)
+    - [Why This Architecture Matters](#why-this-architecture-matters)
+    - [Real-World Example: Handling a Breaking Chart Change](#real-world-example-handling-a-breaking-chart-change)
+  - [Helm Release Name Logic](#helm-release-name-logic)
+    - [Prior Versions (\<= 0.19.9)](#prior-versions--0199)
+    - [Subsequent Versions (\>= 0.20.0)](#subsequent-versions--0200)
+  - [Composition Dynamic Controller Values Injection](#composition-dynamic-controller-values-injection)
+    - [About the `gracefullyPaused` value](#about-the-gracefullypaused-value)
+  - [Configuration](#configuration)
+    - [Operator Env Vars](#operator-env-vars)
+
   
 
 ## Architecture
@@ -18,11 +30,11 @@ The composition-dynamic-controller is an operator that is instantiated by the [c
 
 ![composition-dynamic-controller State Diagram](_diagrams/composition-dynamic-controller-flow.png "composition-dynamic-controller  State Diagram")
 
-### **Composition Dynamic Controller (CDC) & Chart Inspector: Secure Helm Lifecycle Management**
+### Composition Dynamic Controller (CDC) & Chart Inspector: Secure Helm Lifecycle Management
 
 The **Composition Dynamic Controller (CDC)** is a specialized Kubernetes operator that orchestrates the end-to-end lifecycle of Krateo compositions. Acting as the reconciliation engine for Composition custom resources, it bridges declarative application definitions with Helm’s packaging system through intelligent automation. The **Chart Inspector** serves as its "safety advisor," enabling proactive decision-making via dry-run analysis.
 
-#### **Core CDC Workflow (with Chart Inspector Integration)**
+#### Core CDC Workflow (with Chart Inspector Integration)
 1. **Reconciliation Trigger**  
    - Watches for changes to `Composition` CRs or Helm chart versions.  
    - Invokes the **Chart Inspector** to simulate installations/upgrades *before* execution.
@@ -43,7 +55,7 @@ The **Composition Dynamic Controller (CDC)** is a specialized Kubernetes operato
 
 ---
 
-### **Key Capabilities Enabled by This Collaboration**
+### Key Capabilities Enabled by This Collaboration
 
 | **Feature**                | **CDC’s Role**                          | **Chart Inspector’s Contribution**                  |
 |----------------------------|-----------------------------------------|----------------------------------------------------|
@@ -55,7 +67,7 @@ The **Composition Dynamic Controller (CDC)** is a specialized Kubernetes operato
 
 ---
 
-### **Why This Architecture Matters**
+### Why This Architecture Matters
 1. **Safety Net**  
    - The Chart Inspector’s dry-run prevents "helm surprises" (e.g., undeclared CRD creations or namespace pollution).  
    - Example: Blocks a chart upgrade if the new version requires a `ClusterRole` the CDC isn’t authorized to manage.
@@ -70,13 +82,40 @@ The **Composition Dynamic Controller (CDC)** is a specialized Kubernetes operato
 
 ---
 
-### **Real-World Example: Handling a Breaking Chart Change**
+### Real-World Example: Handling a Breaking Chart Change
 1. **Scenario**: A Helm chart v1.2.0 introduces a new `CustomResourceDefinition` (CRD).  
 2. **CDC+Inspector Flow**:  
    - **Dry-run** detects the new CRD and its required API group permissions.  
    - **CDC** creates a `ClusterRole` granting `create/get/list` for the CRD.  
    - **Upgrade** proceeds *only after* the CRD and RBAC are confirmed active.  
 3. **Result**: Zero downtime; no "helm upgrade failed: CRD missing" errors.
+
+
+---
+
+## Helm Release Name Logic
+
+### Prior Versions (<= 0.19.9)
+
+For versions up to 0.19.9, the **`composition-dynamic-controller`** used the following logic to determine the **Helm release name** associated with a composition resource:
+
+1.  If the **label** `krateo.io/release-name` is set on the composition resource, its value is used as the Helm release name.
+2.  Otherwise, the **composition resource name** is used as the Helm release name.
+
+---
+
+### Subsequent Versions (>= 0.20.0)
+
+Starting from version 0.20.0, the **`composition-dynamic-controller`** uses the following logic to determine the Helm release name associated with a composition resource:
+
+1.  If the **annotation** `krateo.io/release-name` is set on the composition resource, its value is used as the Helm release name.
+2.  Otherwise, the release name is composed as follows: **`{composition.metadata.name}-{composition.metadata.uid[:8]}`**.
+
+**N.B.:** From this version onward, the `metadata.name` field of the composition cannot exceed **44 characters**. This is because the UID suffix adds **9 characters** to the release name (the hyphen `-` plus the 8 characters of the UID), and Helm release names cannot exceed **53 characters** in total.
+
+This change was implemented to avoid conflicts when multiple resources belonging to the `composition.krateo.io` group with the same `metadata.name` are created in **different namespaces**.
+
+---
 
 
 ## Composition Dynamic Controller Values Injection

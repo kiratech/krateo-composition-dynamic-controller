@@ -1,11 +1,14 @@
 package meta
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 const (
@@ -29,6 +32,17 @@ const (
 	// This is used to track how long the resource has been paused.
 	AnnotationKeyReconciliationGracefullyPausedTime = "krateo.io/gracefully-paused-time"
 )
+
+func CalculateReleaseName(o runtime.Object) string {
+	obj := o.(metav1.Object)
+	uid := obj.GetUID()
+	if uid == "" {
+		// Generate random string if UID is not set
+		return fmt.Sprintf("%s-%s", obj.GetName(), rand.SafeEncodeString(rand.String(8)))
+	}
+	hashstr := rand.SafeEncodeString(string(obj.GetUID())[:8])
+	return fmt.Sprintf("%s-%s", obj.GetName(), hashstr)
+}
 
 func GetReleaseName(o metav1.Object) string {
 	return o.GetLabels()[ReleaseNameLabel]

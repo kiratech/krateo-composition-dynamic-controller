@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	xcontext "github.com/krateoplatformops/unstructured-runtime/pkg/context"
+
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 
@@ -21,7 +23,6 @@ import (
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/maps"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
@@ -61,7 +62,7 @@ const (
 
 var _ controller.ExternalClient = (*handler)(nil)
 
-func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event event.APIRecorder, pluralizer pluralizer.PluralizerInterface, chartInspectorUrl string, saName string, saNamespace string) controller.ExternalClient {
+func NewHandler(cfg *rest.Config, pig archive.Getter, event event.APIRecorder, pluralizer pluralizer.PluralizerInterface, chartInspectorUrl string, saName string, saNamespace string) controller.ExternalClient {
 	val, ok := os.LookupEnv(helmRegistryConfigPathEnvVar)
 	if ok {
 		helmRegistryConfigPath = val
@@ -72,10 +73,8 @@ func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event 
 	return &handler{
 		kubeconfig:        cfg,
 		pluralizer:        pluralizer,
-		logger:            log,
 		packageInfoGetter: pig,
 		eventRecorder:     event,
-
 		chartInspectorUrl: chartInspectorUrl,
 		saName:            saName,
 		saNamespace:       saNamespace,
@@ -84,7 +83,6 @@ func NewHandler(cfg *rest.Config, log logging.Logger, pig archive.Getter, event 
 
 type handler struct {
 	kubeconfig        *rest.Config
-	logger            logging.Logger
 	pluralizer        pluralizer.PluralizerInterface
 	packageInfoGetter archive.Getter
 	eventRecorder     event.APIRecorder
@@ -96,7 +94,10 @@ type handler struct {
 
 func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (controller.ExternalObservation, error) {
 	mg = mg.DeepCopy()
-	log := h.logger.WithValues("op", "Observe").
+
+	log := xcontext.Logger(ctx)
+
+	log = log.WithValues("op", "Observe").
 		WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
@@ -112,7 +113,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		DynamicClient: dyn,
 	}
 
-	compositionMeta.SetReleaseName(mg, mg.GetName())
+	compositionMeta.SetReleaseName(mg, compositionMeta.CalculateReleaseName(mg))
 	if _, p := compositionMeta.GetGracefullyPausedTime(mg); p && compositionMeta.IsGracefullyPaused(mg) {
 		log.Debug("Composition is gracefully paused, skipping observe.")
 		h.eventRecorder.Event(mg, event.Normal(reasonReconciliationGracefullyPaused, "Observe", "Reconciliation is paused via the gracefully paused annotation."))
@@ -147,12 +148,12 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, fmt.Errorf("updating cr with values: %w", err)
 	}
 
-	hc, _, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, _, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
 	if err != nil {
 		return controller.ExternalObservation{}, fmt.Errorf("getting helm client: %w", err)
 	}
 
-	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
 	if err != nil {
 		return controller.ExternalObservation{}, fmt.Errorf("finding helm release: %w", err)
 	}
@@ -168,7 +169,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		log.Debug("Composition stuck install or upgrade in progress. Rolling back to previous release before re-attempting.")
 		// Rollback to previous release
 		err = hc.RollbackRelease(&helmclient.ChartSpec{
-			ReleaseName: meta.GetReleaseName(mg),
+			ReleaseName: compositionMeta.GetReleaseName(mg),
 			Namespace:   mg.GetNamespace(),
 			Repo:        pkg.Repo,
 			ChartName:   pkg.URL,
@@ -189,7 +190,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
-		WithBaseName(meta.GetReleaseName(mg)).
+		WithBaseName(compositionMeta.GetReleaseName(mg)).
 		Generate(rbacgen.Parameters{
 			CompositionName:                mg.GetName(),
 			CompositionNamespace:           mg.GetNamespace(),
@@ -207,7 +208,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, fmt.Errorf("installing rbac: %w", err)
 	}
 
-	tracer := &tracer.Tracer{}
+	tracer := tracer.NewTracer(ctx, meta.IsVerbose(mg))
 	hc, clientset, err := h.helmClientForResourceWithTransportWrapper(mg, pkg.RegistryAuth, func(rt http.RoundTripper) http.RoundTripper {
 		return tracer.WithRoundTripper(rt)
 	})
@@ -302,7 +303,9 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) error {
 	mg = mg.DeepCopy()
-	log := h.logger.WithValues("op", "Create").
+
+	log := xcontext.Logger(ctx)
+	log = log.WithValues("op", "Create").
 		WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
@@ -324,7 +327,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return nil
 	}
 
-	compositionMeta.SetReleaseName(mg, mg.GetName())
+	compositionMeta.SetReleaseName(mg, compositionMeta.CalculateReleaseName(mg))
 	mg, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
 		return fmt.Errorf("updating cr with values: %w", err)
@@ -347,7 +350,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
-		WithBaseName(meta.GetReleaseName(mg)).
+		WithBaseName(compositionMeta.GetReleaseName(mg)).
 		Generate(rbacgen.Parameters{
 			CompositionName:                mg.GetName(),
 			CompositionNamespace:           mg.GetNamespace(),
@@ -366,7 +369,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Install the helm chart
-	hc, clientset, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, clientset, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
 	if err != nil {
 		return fmt.Errorf("getting helm client: %w", err)
 	}
@@ -437,7 +440,9 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) error {
 	mg = mg.DeepCopy()
 
-	log := h.logger.WithValues("op", "Update").
+	log := xcontext.Logger(ctx)
+
+	log = log.WithValues("op", "Update").
 		WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
@@ -471,12 +476,12 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Update the helm chart
-	hc, clientset, err := h.helmClientForResource(mg, pkg.RegistryAuth)
+	hc, clientset, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
 	if err != nil {
 		return fmt.Errorf("getting helm client: %w", err)
 	}
 
-	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
@@ -544,7 +549,9 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) error {
 	mg = mg.DeepCopy()
 
-	log := h.logger.WithValues("op", "Delete").
+	log := xcontext.Logger(ctx)
+
+	log = log.WithValues("op", "Delete").
 		WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
@@ -570,7 +577,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	hc, _, err := h.helmClientForResource(mg, nil)
+	hc, _, err := h.helmClientForResource(ctx, mg, nil)
 	if err != nil {
 		return fmt.Errorf("getting helm client: %w", err)
 	}
@@ -581,7 +588,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	chartSpec := helmclient.ChartSpec{
-		ReleaseName: meta.GetReleaseName(mg),
+		ReleaseName: compositionMeta.GetReleaseName(mg),
 		Namespace:   mg.GetNamespace(),
 		ChartName:   pkg.URL,
 		Version:     pkg.Version,
@@ -589,7 +596,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Check if the release exists before uninstalling
-	rel, err := helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
@@ -604,12 +611,12 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("uninstalling helm chart: %w", err)
 	}
 
-	rel, err = helmchart.FindRelease(hc, meta.GetReleaseName(mg))
+	rel, err = helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel != nil {
-		return fmt.Errorf("composition not deleted, release %s still exists", meta.GetReleaseName(mg))
+		return fmt.Errorf("composition not deleted, release %s still exists", compositionMeta.GetReleaseName(mg))
 	}
 
 	log.Debug("Uninstalling RBAC", "package", pkg.URL)
@@ -622,7 +629,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
-		WithBaseName(meta.GetReleaseName(mg)).
+		WithBaseName(compositionMeta.GetReleaseName(mg)).
 		Generate(rbacgen.Parameters{
 			CompositionName:                mg.GetName(),
 			CompositionNamespace:           mg.GetNamespace(),
@@ -652,8 +659,11 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	return nil
 }
 
-func (h *handler) helmClientForResource(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth) (helmclient.Client, helmclient.CachedClientsInterface, error) {
-	log := h.logger.WithValues("apiVersion", mg.GetAPIVersion()).
+func (h *handler) helmClientForResource(ctx context.Context, mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth) (helmclient.Client, helmclient.CachedClientsInterface, error) {
+
+	log := xcontext.Logger(ctx)
+
+	log = log.WithValues("apiVersion", mg.GetAPIVersion()).
 		WithValues("kind", mg.GetKind()).
 		WithValues("name", mg.GetName()).
 		WithValues("namespace", mg.GetNamespace())

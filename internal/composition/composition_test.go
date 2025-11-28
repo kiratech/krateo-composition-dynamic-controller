@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,15 +25,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/go-logr/logr"
 	"github.com/gobuffalo/flect"
+	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
-	prettylog "github.com/krateoplatformops/plumbing/slogs/pretty"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 
 	"github.com/krateoplatformops/plumbing/e2e"
@@ -135,17 +131,6 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			lh := prettylog.New(&slog.HandlerOptions{
-				Level:     slog.LevelDebug,
-				AddSource: false,
-			},
-				prettylog.WithDestinationWriter(os.Stderr),
-				prettylog.WithColor(),
-				prettylog.WithOutputEmptyAttrs(),
-			)
-
-			log := logging.NewLogrLogger(logr.FromSlogHandler(slog.New(lh).Handler()))
-
 			var pig archive.Getter
 			pluralizer := FakePluralizer{}
 
@@ -204,7 +189,7 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), pluralizer, chartInspectorMockURL, "test-sa", altNamespace)
+			handler = NewHandler(cfg.Client().RESTConfig(), pig, *event.NewAPIRecorder(rec), pluralizer, chartInspectorMockURL, "test-sa", altNamespace)
 
 			// handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), pluralizer, chartInspectorUrl, "test-sa", altNamespace)
 
@@ -527,7 +512,7 @@ func TestController(t *testing.T) {
 			Version:  "v1",
 			Resource: "secrets",
 		}).Namespace(obj.GetNamespace()).List(ctx, metav1.ListOptions{
-			LabelSelector: "name=" + meta.GetReleaseName(u) + ",owner=helm",
+			LabelSelector: "name=" + compositionMeta.GetReleaseName(u) + ",owner=helm",
 		})
 		if tmp != nil && len(tmp.Items) > 0 {
 			t.Error("Helm release secret still exists after deletion.")
