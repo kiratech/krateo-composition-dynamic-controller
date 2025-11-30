@@ -26,6 +26,15 @@ func (h *ObjectHash) SumHash(a ...any) error {
 	return nil
 }
 
+func (h *ObjectHash) SumHashStrings(a ...string) error {
+	for _, v := range a {
+		if _, err := h.Write([]byte(v)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *ObjectHash) Reset() {
 	h.Hash64.Reset()
 }

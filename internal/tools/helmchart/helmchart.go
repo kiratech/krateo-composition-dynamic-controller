@@ -8,7 +8,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 
-	"github.com/krateoplatformops/plumbing/maps"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 
@@ -86,8 +85,22 @@ type RenderTemplateOptions struct {
 	Pluralizer     pluralizer.PluralizerInterface
 }
 
+// MinimalMetadata holds only the necessary fields for reference extraction.
+// Decoding into this struct is significantly cheaper than map[string]any.
+type minimalMetadata struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Metadata   struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		// Use the map to capture annotations, including the helm hook
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
+}
+
 func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, clientset helmclient.CachedClientsInterface) ([]objectref.ObjectRef, string, error) {
 
+	// The hasher must implement io.Writer to allow incremental hashing.
 	var hasher = hasher.NewFNVObjectHash()
 	// build an io.Reader that streams manifest + hooks without concatenating into a single []byte
 	var readers []io.Reader
@@ -108,9 +121,28 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 	}
 
 	combined := io.MultiReader(readers...)
-	decoder := yamlutil.NewYAMLOrJSONDecoder(combined, 4096)
+
+	// 1. Set up io.Pipe for concurrent stream processing.
+	// pr is the Reader for the decoder, pw is the Writer fed by the goroutine.
+	pr, pw := io.Pipe()
+
+	// 2. Use io.MultiWriter to pipe the stream to both:
+	//    a) The PipeWriter (pw), which feeds the decoder in the main routine.
+	//    b) The Hasher, which calculates the hash incrementally.
+	mw := io.MultiWriter(pw, hasher)
+
+	// 3. Start a goroutine to copy the combined manifest into the MultiWriter concurrently.
+	go func() {
+		// io.Copy reads from 'combined' (source) and writes to 'mw' (destinations).
+		// It's crucial to close the PipeWriter (pw) when finished, or the decoder will hang.
+		_, err := io.Copy(mw, combined)
+		pw.CloseWithError(err)
+	}()
+
+	// The decoder now reads from the PipeReader (pr).
+	decoder := yamlutil.NewYAMLOrJSONDecoder(pr, 4096)
 	for {
-		var doc map[string]any
+		var doc minimalMetadata
 		if err := decoder.Decode(&doc); err != nil {
 			if err == io.EOF {
 				break
@@ -118,16 +150,12 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 			// skip invalid doc but continue processing others
 			continue
 		}
-		if doc == nil {
-			continue
-		}
 
-		// extract minimal metadata without building runtime.Object using maps helper
-		apiVersion, _ := maps.NestedString(doc, "apiVersion")
-		kind, _ := maps.NestedString(doc, "kind")
-		name, _ := maps.NestedString(doc, "metadata", "name")
-		namespace, _ := maps.NestedString(doc, "metadata", "namespace")
-		hook, _ := maps.NestedString(doc, "metadata", "annotations", "helm.sh/hook")
+		apiVersion := doc.APIVersion
+		kind := doc.Kind
+		name := doc.Metadata.Name
+		namespace := doc.Metadata.Namespace
+		hook := doc.Metadata.Annotations["helm.sh/hook"]
 
 		if namespace == "" {
 			namespace = defaultNamespace
@@ -136,6 +164,8 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 			gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
 			mapping, err := clientset.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 			if err != nil {
+				// Close the reader pipe on error to ensure the goroutine doesn't hang
+				pr.Close()
 				return nil, "", fmt.Errorf("failed to get REST mapping for %s: %w", gvk.String(), err)
 			}
 			if mapping.Scope.Name() == meta.RESTScopeNameRoot {
@@ -146,6 +176,7 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 		if hook != "" {
 			continue
 		}
+		// skip empty documents
 		if apiVersion == "" && kind == "" && name == "" {
 			continue
 		}
@@ -156,15 +187,13 @@ func GetResourcesRefFromRelease(rel *release.Release, defaultNamespace string, c
 			Name:       name,
 			Namespace:  namespace,
 		})
-
-		apiVersion = ""
-		kind = ""
-		name = ""
-		namespace = ""
-		hook = ""
-
-		hasher.SumHash(doc)
 	}
+
+	// Ensure the PipeReader is closed after the loop to clean up the pipe resources.
+	pr.Close()
+
+	// The hasher already holds the final hash digest, calculated incrementally.
+	// We use GetHash() to retrieve the final hash string.
 	return all, hasher.GetHash(), nil
 }
 
