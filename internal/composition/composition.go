@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
+
 	xcontext "github.com/krateoplatformops/unstructured-runtime/pkg/context"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/chartinspector"
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
+	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient/tracer"
@@ -200,12 +203,28 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
 		})
 	if err != nil {
+		retErr := fmt.Errorf("generating RBAC using chart-inspector: %w", err)
+		condition := condition.Unavailable()
+		condition.Message = retErr.Error()
+		unstructuredtools.SetConditions(mg, condition)
+		_, err = tools.UpdateStatus(ctx, mg, updateOpts)
+		if err != nil {
+			return controller.ExternalObservation{}, fmt.Errorf("updating status after failure: %w", err)
+		}
 		return controller.ExternalObservation{}, fmt.Errorf("generating RBAC using chart-inspector: %w", err)
 	}
 	rbInstaller := rbac.NewRBACInstaller(dyn)
 	err = rbInstaller.ApplyRBAC(generated)
 	if err != nil {
-		return controller.ExternalObservation{}, fmt.Errorf("installing rbac: %w", err)
+		retErr := fmt.Errorf("applying rbac: %w", err)
+		condition := condition.Unavailable()
+		condition.Message = retErr.Error()
+		unstructuredtools.SetConditions(mg, condition)
+		_, err = tools.UpdateStatus(ctx, mg, updateOpts)
+		if err != nil {
+			return controller.ExternalObservation{}, fmt.Errorf("updating status after failure: %w", err)
+		}
+		return controller.ExternalObservation{}, retErr
 	}
 
 	tracer := tracer.NewTracer(ctx, meta.IsVerbose(mg))
@@ -238,7 +257,15 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 
 	upgradedRel, err := helmchart.Update(ctx, opts)
 	if err != nil {
-		return controller.ExternalObservation{}, err
+		retErr := fmt.Errorf("updating helm chart: %w", err)
+		condition := condition.Unavailable()
+		condition.Message = retErr.Error()
+		unstructuredtools.SetConditions(mg, condition)
+		_, err = tools.UpdateStatus(ctx, mg, updateOpts)
+		if err != nil {
+			return controller.ExternalObservation{}, fmt.Errorf("updating status after failure: %w", err)
+		}
+		return controller.ExternalObservation{}, retErr
 	}
 
 	_, digest, err := helmchart.GetResourcesRefFromRelease(upgradedRel, mg.GetNamespace(), clientset)
