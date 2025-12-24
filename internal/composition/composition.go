@@ -542,18 +542,8 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		message:        "Composition values updated",
 		chartURL:       pkg.URL,
 		chartVersion:   pkg.Version,
+		conditionType:  ConditionTypeAvailable,
 	}
-
-	if compositionMeta.IsGracefullyPaused(mg) {
-		statusOpts.conditionType = ConditionTypeReconcileGracefullyPaused
-		compositionMeta.SetGracefullyPausedTime(mg, time.Now())
-		log.Debug("Composition gracefully paused.")
-		h.eventRecorder.Event(mg, event.Normal(reasonReconciliationGracefullyPaused, "Update", "Reconciliation paused via the gracefully paused annotation."))
-	} else {
-		statusOpts.conditionType = ConditionTypeAvailable
-		meta.RemoveAnnotations(mg, compositionMeta.AnnotationKeyReconciliationGracefullyPausedTime)
-	}
-
 	err = setStatus(mg, statusOpts)
 	if err != nil {
 		return fmt.Errorf("setting status: %w", err)
@@ -566,7 +556,19 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	if err != nil {
 		return fmt.Errorf("updating cr status with values: %w", err)
 	}
-	_, err = tools.Update(ctx, mg, updateOpts)
+
+	if compositionMeta.IsGracefullyPaused(mg) {
+		statusOpts.conditionType = ConditionTypeReconcileGracefullyPaused
+		compositionMeta.SetGracefullyPausedTime(mg, time.Now())
+		log.Debug("Composition gracefully paused.")
+		h.eventRecorder.Event(mg, event.Normal(reasonReconciliationGracefullyPaused, "Update", "Reconciliation paused via the gracefully paused annotation."))
+
+	} else {
+		statusOpts.conditionType = ConditionTypeAvailable
+		meta.RemoveAnnotations(mg, compositionMeta.AnnotationKeyReconciliationGracefullyPausedTime)
+	}
+
+	mg, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
 		return fmt.Errorf("updating cr with values: %w", err)
 	}
