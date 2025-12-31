@@ -153,16 +153,28 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 	}
 
 	var compositionDefinition *unstructured.Unstructured
-
 	if cdInfo != nil {
 		g.logger.Debug("Getting composition definition", "compositionDefinitionName", cdInfo.Name, "compositionDefinitionNamespace", cdInfo.Namespace, "compositionDefinitionGVR", cdInfo.GVR.String())
 		compositionDefinition, err = g.dynamicClient.Resource(cdInfo.GVR).
 			Namespace(cdInfo.Namespace).
 			Get(context.Background(), cdInfo.Name, metav1.GetOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("error getting composition definition '%s' in namespace '%s' with gvr: %s: %w", cdInfo.Name, cdInfo.Namespace, cdInfo.GVR.String(), err)
+			g.logger.Warn("Error getting composition definition", "error", err.Error(), "compositionDefinitionName", cdInfo.Name, "compositionDefinitionNamespace", cdInfo.Namespace, "gvr", cdInfo.GVR.String())
+			compositionDefinition = nil
 		}
-	} else {
+		if compositionDefinition != nil {
+			version, kind, err := getChartVersionKind(compositionDefinition)
+			if err != nil {
+				return nil, fmt.Errorf("error getting chart version and kind from composition definition '%s' in namespace '%s': %w", cdInfo.Name, cdInfo.Namespace, err)
+			}
+			if version != uns.GetLabels()[compositionMeta.CompositionVersionLabel] || kind != uns.GetKind() {
+				g.logger.Warn("Labels do not match composition definition", "compositionDefinitionName", cdInfo.Name, "compositionDefinitionNamespace", cdInfo.Namespace, "gvr", gvr.String(), "expectedVersion", uns.GetLabels()[compositionMeta.CompositionVersionLabel], "foundVersion", version, "expectedKind", uns.GetKind(), "foundKind", kind)
+				compositionDefinition = nil
+			}
+		}
+	}
+
+	if compositionDefinition == nil {
 		// Search for the composition definition in the namespace of the unstructured object
 		g.logger.Debug("Searching for composition definition")
 		compositionDefinition, err = g.searchCompositionDefinition(gvr, uns)
@@ -298,31 +310,11 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 	if tot > 1 {
 		found := false
 		for _, el := range all.Items {
-			apiversion, ok, err := unstructured.NestedString(el.UnstructuredContent(), "status", "apiVersion")
+			version, kind, err := getChartVersionKind(&el)
 			if err != nil {
-				g.logger.Debug("Failed to resolve 'status.apiVersion'", "error", err.Error(), "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace())
+				g.logger.Debug("Failed to get chart version and kind", "error", err.Error(), "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace(), "gvr", gvr.String())
 				continue
 			}
-			if !ok {
-				g.logger.Debug("Failed to resolve 'status.apiVersion'", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace())
-				continue
-			}
-			versionSplit := strings.Split(apiversion, "/")
-			if len(versionSplit) != 2 {
-				g.logger.Debug("Invalid format for 'status.apiVersion'", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace())
-				continue
-			}
-			kind, ok, err := unstructured.NestedString(el.UnstructuredContent(), "status", "kind")
-			if err != nil {
-				g.logger.Debug("Failed to resolve 'status.kind'", "error", err.Error(), "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace())
-				continue
-			}
-			if !ok {
-				g.logger.Debug("Failed to resolve 'status.kind'", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace())
-				continue
-			}
-
-			version := versionSplit[1]
 			if version == mg.GetLabels()[compositionMeta.CompositionVersionLabel] && kind == mg.GetKind() {
 				compositionDefinition = &el
 				g.logger.Debug("Found matching composition definition", "compositionDefinitionName", el.GetName(), "compositionDefinitionNamespace", el.GetNamespace(), "gvr", gvr.String())
@@ -339,4 +331,28 @@ func (g *dynamicGetter) searchCompositionDefinition(gvr schema.GroupVersionResou
 	g.logger.Debug("Using composition definition", "compositionDefinitionName", compositionDefinition.GetName(), "compositionDefinitionNamespace", compositionDefinition.GetNamespace(), "gvr", gvr.String())
 
 	return compositionDefinition, nil
+}
+
+func getChartVersionKind(el *unstructured.Unstructured) (string, string, error) {
+	apiversion, ok, err := unstructured.NestedString(el.UnstructuredContent(), "status", "apiVersion")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve 'status.apiVersion': %w", err)
+	}
+	if !ok {
+		return "", "", fmt.Errorf("missing 'status.apiVersion'")
+	}
+	versionSplit := strings.Split(apiversion, "/")
+	if len(versionSplit) != 2 {
+		return "", "", fmt.Errorf("invalid format for 'status.apiVersion'")
+	}
+	kind, ok, err := unstructured.NestedString(el.UnstructuredContent(), "status", "kind")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve 'status.kind': %w", err)
+	}
+	if !ok {
+		return "", "", fmt.Errorf("missing 'status.kind'")
+	}
+
+	version := versionSplit[1]
+	return version, kind, nil
 }
