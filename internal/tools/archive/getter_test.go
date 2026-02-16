@@ -1,7 +1,7 @@
 //go:build integration
 // +build integration
 
-package archive_test
+package archive
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gobuffalo/flect"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
+
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
@@ -51,7 +51,7 @@ var (
 )
 
 const (
-	testdataPath = "../../../../testdata"
+	testdataPath = "../../../testdata"
 )
 
 type FakePluralizer struct{}
@@ -262,7 +262,7 @@ func testGetterFunctionality(ctx context.Context, t *testing.T, c *envconf.Confi
 
 			// Test dynamic getter
 			pluralizer := FakePluralizer{}
-			gt, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
+			gt, err := Dynamic(c.Client().RESTConfig(), pluralizer)
 			require.NoError(t, err, "Should be able to create dynamic getter")
 
 			// Test the getter
@@ -338,7 +338,7 @@ func testStaticGetter(ctx context.Context, t *testing.T, c *envconf.Config) cont
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			getter := archive.Static(tc.chartURL)
+			getter := Static(tc.chartURL)
 			require.NotNil(t, getter, "Static getter should not be nil")
 
 			// Test with empty unstructured (static getter ignores input)
@@ -349,7 +349,7 @@ func testStaticGetter(ctx context.Context, t *testing.T, c *envconf.Config) cont
 			assert.Equal(t, tc.chartURL, info.URL, "URL should match input")
 			assert.Empty(t, info.Version, "Static getter should not have version")
 			assert.Empty(t, info.Repo, "Static getter should not have repo")
-			assert.Nil(t, info.RegistryAuth, "Static getter should not have registry auth")
+			assert.Nil(t, info.Auth, "Static getter should not have registry auth")
 			assert.Nil(t, info.CompositionDefinitionInfo, "Static getter should not have composition definition info")
 
 			// Test URL type detection
@@ -369,7 +369,7 @@ func testStaticGetter(ctx context.Context, t *testing.T, c *envconf.Config) cont
 
 func testErrorConditions(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 	pluralizer := FakePluralizer{}
-	getter, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
+	getter, err := Dynamic(c.Client().RESTConfig(), pluralizer)
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -438,7 +438,7 @@ func testErrorConditions(ctx context.Context, t *testing.T, c *envconf.Config) c
 
 func testEdgeCases(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 	pluralizer := FakePluralizer{}
-	getter, err := archive.Dynamic(c.Client().RESTConfig(), pluralizer)
+	getter, err := Dynamic(c.Client().RESTConfig(), pluralizer)
 	require.NoError(t, err)
 
 	// Test with nil input
@@ -475,7 +475,7 @@ func testEdgeCases(ctx context.Context, t *testing.T, c *envconf.Config) context
 		}
 
 		for _, tc := range testCases {
-			info := &archive.Info{URL: tc.url}
+			info := &Info{URL: tc.url}
 			assert.Equal(t, tc.isOCI, info.IsOCI(), "IsOCI mismatch for %s", tc.url)
 			assert.Equal(t, tc.isTGZ, info.IsTGZ(), "IsTGZ mismatch for %s", tc.url)
 			assert.Equal(t, tc.isHTTP, info.IsHTTP(), "IsHTTP mismatch for %s", tc.url)

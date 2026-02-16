@@ -27,12 +27,13 @@ import (
 
 	"github.com/gobuffalo/flect"
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/archive"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 
+	mapper "github.com/krateoplatformops/composition-dynamic-controller/internal/tools/dynamic"
 	"github.com/krateoplatformops/plumbing/e2e"
 	xenv "github.com/krateoplatformops/plumbing/env"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -189,7 +190,12 @@ func TestController(t *testing.T) {
 				return ctx
 			}
 
-			handler = NewHandler(cfg.Client().RESTConfig(), pig, *event.NewAPIRecorder(rec), pluralizer, chartInspectorMockURL, "test-sa", altNamespace)
+			mapper, err := mapper.NewRESTMapper(cfg.Client().RESTConfig())
+			if err != nil {
+				t.Error("Creating REST mapper.", "error", err)
+				return ctx
+			}
+			handler = NewHandler(cfg.Client().RESTConfig(), pig, *event.NewAPIRecorder(rec), pluralizer, mapper, chartInspectorMockURL, "test-sa", altNamespace)
 
 			// handler = NewHandler(cfg.Client().RESTConfig(), log, pig, *event.NewAPIRecorder(rec), pluralizer, chartInspectorUrl, "test-sa", altNamespace)
 
@@ -420,6 +426,96 @@ func TestController(t *testing.T) {
 		}
 
 		return ctx
+	}).Assess("Break: Verify Observe Side Effects", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		dy := dynamic.NewForConfigOrDie(c)
+		var obj unstructured.Unstructured
+		if err := decoder.DecodeFile(os.DirFS(filepath.Join(testdataPath, "compositions")), "focus.yaml", &obj); err != nil {
+			t.Error("Decoding composition manifests.", "error", err)
+			return ctx
+		}
+
+		// 1. Get the Composition
+		version := obj.GetLabels()["krateo.io/composition-version"]
+		gvr := schema.GroupVersionResource{
+			Group:    "composition.krateo.io",
+			Version:  version,
+			Resource: flect.Pluralize(strings.ToLower(obj.GetObjectKind().GroupVersionKind().Kind)),
+		}
+
+		cli := dy.Resource(gvr).Namespace(obj.GetNamespace())
+		u, err := cli.Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			t.Error("Getting composition.", "error", err)
+			return ctx
+		}
+
+		// 2. Inspect the underlying Helm Secret to get the INITIAL Revision number
+		// We look for secrets with owner=helm and name=release-name
+		releaseName := compositionMeta.GetReleaseName(u)
+		// secretClient := cfg.Client().Resources().GetControllerRuntimeClient()
+
+		// Helper to count revisions
+		countRevisions := func() (int, error) {
+			// var secrets corev1.SecretList
+			// // Helm stores releases in secrets with type 'helm.sh/release.v1'
+			// // We verify by label "name" which equals the release name
+			// labels := map[string]string{
+			// 	"name":  releaseName,
+			// 	"owner": "helm",
+			// }
+			// Note: In e2e-framework, we might need to use the dynamic client or typed client for listing with selectors
+			// Using standard client-go for list here to be safe within the test closure
+			clientset, _ := kubernetes.NewForConfig(c)
+			list, err := clientset.CoreV1().Secrets(u.GetNamespace()).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("name=%s,owner=helm", releaseName),
+			})
+			if err != nil {
+				return 0, err
+			}
+			return len(list.Items), nil
+		}
+
+		initialRevisionCount, err := countRevisions()
+		if err != nil {
+			t.Error("Failed to count helm revisions", err)
+			return ctx
+		}
+		t.Logf("Initial Helm Revision Count: %d", initialRevisionCount)
+
+		// 3. The "Stress" Loop
+		// We call Observe multiple times. In a correct controller, Observe is Read-Only.
+		// It should NOT trigger a new Helm Release.
+		t.Log("Starting Observe Loop (Simulating controller reconciliation)...")
+		for i := 0; i < 5; i++ {
+			// Refetch to ensure we have latest resourceVersion for internal logic
+			u, _ = cli.Get(ctx, obj.GetName(), metav1.GetOptions{})
+
+			// CALL OBSERVE
+			_, err := handler.Observe(ctx, u)
+			if err != nil {
+				t.Logf("Observe iteration %d failed: %v", i, err)
+			}
+		}
+
+		// 4. Check Revisions again
+		finalRevisionCount, err := countRevisions()
+		if err != nil {
+			t.Error("Failed to count helm revisions after loop", err)
+			return ctx
+		}
+		t.Logf("Final Helm Revision Count: %d", finalRevisionCount)
+
+		if finalRevisionCount > initialRevisionCount {
+			t.Errorf("CRITICAL FAILURE: The Observe method is not idempotent! "+
+				"Helm revisions increased from %d to %d without any Spec changes. "+
+				"This implies 'hc.Upgrade' is running on every reconciliation loop.",
+				initialRevisionCount, finalRevisionCount)
+
+			// Fail immediately to prevent cleaning up evidence if debugging
+			t.FailNow()
+		}
+
+		return ctx
 	}).Assess("Delete", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 		dy := dynamic.NewForConfigOrDie(c)
 		var obj unstructured.Unstructured
@@ -638,6 +734,11 @@ func SetSAToken(ctx context.Context, t *testing.T, cfg *envconf.Config) *rest.Co
 			{
 				APIGroups: []string{"rbac.authorization.k8s.io"},
 				Resources: []string{"roles", "rolebindings", "clusterroles", "clusterrolebindings"},
+				Verbs:     []string{"*"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"secrets"},
 				Verbs:     []string{"*"},
 			},
 		},

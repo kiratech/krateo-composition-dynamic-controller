@@ -243,7 +243,7 @@ These enviroment varibles can be changed in the Deployment of the composition-dy
 | URL_PLURALS                            | NOT USED from version 0.17.1 - URL to krateo pluraliser service | `http://snowplow.krateo-system.svc.cluster.local:8081/api-info/names` | Ignored from version 0.17.1 |
 | URL_CHART_INSPECTOR                    | url to chart inspector   |  `http://chart-inspector.krateo-system.svc.cluster.local:8081/`             |   
 | KRATEO_NAMESPACE                       | namespace where krateo is installed       |  krateo-system |
-| HELM_REGISTRY_CONFIG_PATH | default helm config path | /tmp |
+| HELM_REGISTRY_CONFIG_PATH | NOT USED from version '1.0.0' - default helm config path | /tmp |
 | HELM_MAX_HISTORY | Max Helm History | 3 |
 | COMPOSITION_CONTROLLER_MAX_ERROR_RETRY_INTERVAL | The maximum interval between retries when an error occurs. This should be less than the half of the poll interval. |  60s |
 | COMPOSITION_CONTROLLER_MIN_ERROR_RETRY_INTERVAL | The minimum interval between retries when an error occurs. This should be less than max-error-retry-interval. | 1s |

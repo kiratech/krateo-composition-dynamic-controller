@@ -3,9 +3,8 @@ package composition
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
@@ -16,20 +15,26 @@ import (
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient/tracer"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/rbacgen"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/archive"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/processor"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/tracer"
+
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/rbac"
 	"github.com/krateoplatformops/plumbing/env"
+	helmconfig "github.com/krateoplatformops/plumbing/helm"
+	"github.com/krateoplatformops/plumbing/helm/utils"
+	helmutils "github.com/krateoplatformops/plumbing/helm/utils"
+	"github.com/krateoplatformops/plumbing/helm/v3"
+
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/maps"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/controller"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/meta"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools"
-	"helm.sh/helm/v3/pkg/registry"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
@@ -37,10 +42,8 @@ import (
 )
 
 var (
-	helmRegistryConfigPath = env.String(helmRegistryConfigPathEnvVar, helmclient.DefaultRegistryConfigPath)
-	krateoNamespace        = env.String(krateoNamespaceEnvVar, krateoNamespaceDefault)
-	helmRegistryConfigFile = filepath.Join(helmRegistryConfigPath, registry.CredentialsFileBasename)
-	helmMaxHistory         = env.Int(helmMaxHistoryEnvvar, 3)
+	krateoNamespace = env.String(krateoNamespaceEnvVar, krateoNamespaceDefault)
+	helmMaxHistory  = env.Int(helmMaxHistoryEnvvar, 3)
 )
 
 const (
@@ -55,9 +58,8 @@ const (
 	reasonInstalled = "CompositionInstalled"
 
 	// Environment variables
-	helmRegistryConfigPathEnvVar = "HELM_REGISTRY_CONFIG_PATH"
-	helmMaxHistoryEnvvar         = "HELM_MAX_HISTORY"
-	krateoNamespaceEnvVar        = "KRATEO_NAMESPACE"
+	helmMaxHistoryEnvvar  = "HELM_MAX_HISTORY"
+	krateoNamespaceEnvVar = "KRATEO_NAMESPACE"
 
 	// Default namespace for Krateo Installation
 	krateoNamespaceDefault = "krateo-system"
@@ -65,13 +67,14 @@ const (
 
 var _ controller.ExternalClient = (*handler)(nil)
 
-func NewHandler(cfg *rest.Config, pig archive.Getter, event event.APIRecorder, pluralizer pluralizer.PluralizerInterface, chartInspectorUrl string, saName string, saNamespace string) controller.ExternalClient {
-	val, ok := os.LookupEnv(helmRegistryConfigPathEnvVar)
-	if ok {
-		helmRegistryConfigPath = val
-	}
-
-	helmRegistryConfigFile = filepath.Join(helmRegistryConfigPath, registry.CredentialsFileBasename)
+func NewHandler(cfg *rest.Config,
+	pig archive.Getter,
+	event event.APIRecorder,
+	pluralizer pluralizer.PluralizerInterface,
+	mapper apimeta.RESTMapper,
+	chartInspectorUrl string,
+	saName string,
+	saNamespace string) controller.ExternalClient {
 
 	return &handler{
 		kubeconfig:        cfg,
@@ -85,10 +88,12 @@ func NewHandler(cfg *rest.Config, pig archive.Getter, event event.APIRecorder, p
 }
 
 type handler struct {
-	kubeconfig        *rest.Config
-	pluralizer        pluralizer.PluralizerInterface
+	kubeconfig    *rest.Config
+	pluralizer    pluralizer.PluralizerInterface
+	eventRecorder event.APIRecorder
+	mapper        apimeta.RESTMapper
+
 	packageInfoGetter archive.Getter
-	eventRecorder     event.APIRecorder
 
 	chartInspectorUrl string
 	saName            string
@@ -97,6 +102,7 @@ type handler struct {
 
 func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (controller.ExternalObservation, error) {
 	mg = mg.DeepCopy()
+	releaseName := compositionMeta.GetReleaseName(mg)
 
 	log := xcontext.Logger(ctx)
 
@@ -117,6 +123,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 
 	compositionMeta.SetReleaseName(mg, compositionMeta.CalculateReleaseName(mg))
+	releaseName = compositionMeta.GetReleaseName(mg)
 	if _, p := compositionMeta.GetGracefullyPausedTime(mg); p && compositionMeta.IsGracefullyPaused(mg) {
 		log.Debug("Composition is gracefully paused, skipping observe.")
 		h.eventRecorder.Event(mg, event.Normal(reasonReconciliationGracefullyPaused, "Observe", "Reconciliation is paused via the gracefully paused annotation."))
@@ -151,12 +158,16 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, fmt.Errorf("updating cr with values: %w", err)
 	}
 
-	hc, _, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
+	hc, err := helm.NewClient(h.kubeconfig,
+		helm.WithNamespace(mg.GetNamespace()),
+		helm.WithLogger(h.getHelmLogger(meta.IsVerbose(mg))),
+		helm.WithCache(),
+	)
 	if err != nil {
-		return controller.ExternalObservation{}, fmt.Errorf("getting helm client: %w", err)
+		return controller.ExternalObservation{}, fmt.Errorf("creating helm client: %w", err)
 	}
 
-	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
+	rel, err := hc.GetRelease(ctx, releaseName, &helmconfig.GetConfig{})
 	if err != nil {
 		return controller.ExternalObservation{}, fmt.Errorf("finding helm release: %w", err)
 	}
@@ -168,16 +179,11 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}, nil
 	}
 
-	if rel.Info.Status.IsPending() {
+	if rel.Status == helmconfig.StatusPendingInstall || rel.Status == helmconfig.StatusPendingUpgrade {
 		log.Debug("Composition stuck install or upgrade in progress. Rolling back to previous release before re-attempting.")
 		// Rollback to previous release
-		err = hc.RollbackRelease(&helmclient.ChartSpec{
-			ReleaseName: compositionMeta.GetReleaseName(mg),
-			Namespace:   mg.GetNamespace(),
-			Repo:        pkg.Repo,
-			ChartName:   pkg.URL,
-			Version:     pkg.Version,
-			MaxHistory:  helmMaxHistory,
+		rel, err = hc.Rollback(ctx, releaseName, &helmconfig.RollbackConfig{
+			MaxHistory: helmMaxHistory,
 		})
 		if err != nil {
 			return controller.ExternalObservation{}, fmt.Errorf("rolling back release: %w", err)
@@ -193,7 +199,7 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
-		WithBaseName(compositionMeta.GetReleaseName(mg)).
+		WithBaseName(releaseName).
 		Generate(rbacgen.Parameters{
 			CompositionName:                mg.GetName(),
 			CompositionNamespace:           mg.GetNamespace(),
@@ -228,36 +234,44 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	}
 
 	tracer := tracer.NewTracer(ctx, meta.IsVerbose(mg))
-	hc, clientset, err := h.helmClientForResourceWithTransportWrapper(mg, pkg.RegistryAuth, func(rt http.RoundTripper) http.RoundTripper {
+	cfg := rest.CopyConfig(h.kubeconfig)
+	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
 		return tracer.WithRoundTripper(rt)
-	})
+	}
+	hc, err = helm.NewClient(cfg,
+		helm.WithNamespace(mg.GetNamespace()),
+		helm.WithCache(),
+	)
 	if err != nil {
 		return controller.ExternalObservation{}, fmt.Errorf("getting helm client: %w", err)
 	}
 
-	opts := helmchart.UpdateOptions{
-		CheckResourceOptions: helmchart.CheckResourceOptions{
-			DynamicClient: dyn,
-			Pluralizer:    h.pluralizer,
-		},
-		HelmClient:      hc,
-		ChartName:       pkg.URL,
-		Resource:        mg,
-		Repo:            pkg.Repo,
-		Version:         pkg.Version,
-		KrateoNamespace: krateoNamespace,
-		MaxHistory:      helmMaxHistory,
-	}
-	if pkg.RegistryAuth != nil {
-		opts.Credentials = &helmchart.Credentials{
-			Username: pkg.RegistryAuth.Username,
-			Password: pkg.RegistryAuth.Password,
-		}
-	}
-
-	upgradedRel, err := helmchart.Update(ctx, opts)
+	values, err := helmutils.ValuesFromSpec(mg)
 	if err != nil {
-		retErr := fmt.Errorf("updating helm chart: %w", err)
+		return controller.ExternalObservation{}, fmt.Errorf("getting spec values: %w", err)
+	}
+	err = values.InjectGlobalValues(mg, h.pluralizer, krateoNamespace)
+	if err != nil {
+		return controller.ExternalObservation{}, fmt.Errorf("injecting global values: %w", err)
+	}
+	postrenderLabels, err := utils.LabelPostRenderFromSpec(mg, h.pluralizer, krateoNamespace)
+	if err != nil {
+		return controller.ExternalObservation{}, fmt.Errorf("creating label post renderer: %w", err)
+	}
+	upgradedRel, err := hc.Upgrade(ctx, releaseName, pkg.URL, &helmconfig.UpgradeConfig{
+		ActionConfig: &helmconfig.ActionConfig{
+			ChartVersion:          pkg.Version,
+			ChartName:             pkg.Repo,
+			Username:              pkg.Auth.Username,
+			Password:              pkg.Auth.Password,
+			InsecureSkipTLSverify: pkg.InsecureSkipTLSverify,
+			Values:                values,
+			PostRenderer:          postrenderLabels,
+		},
+		MaxHistory: helmMaxHistory,
+	})
+	if err != nil {
+		retErr := fmt.Errorf("upgrading helm chart: %w", err)
 		condition := condition.Unavailable()
 		condition.Message = retErr.Error()
 		unstructuredtools.SetConditions(mg, condition)
@@ -268,10 +282,11 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		return controller.ExternalObservation{}, retErr
 	}
 
-	_, digest, err := helmchart.GetResourcesRefFromRelease(upgradedRel, mg.GetNamespace(), clientset)
+	digest, err := processor.ComputeReleaseDigest(upgradedRel)
 	if err != nil {
-		return controller.ExternalObservation{}, fmt.Errorf("getting resources from release: %w", err)
+		return controller.ExternalObservation{}, fmt.Errorf("computing release digest: %w", err)
 	}
+
 	previousDigest, err := maps.NestedString(mg.Object, "status", "digest")
 	if err != nil {
 		return controller.ExternalObservation{}, fmt.Errorf("getting previous digest from status: %w", err)
@@ -279,9 +294,9 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 	if previousDigest == "" {
 		// Calculate the digest from the previous release if not present in status
 		log.Debug("Previous digest not found in status, calculating from previous release")
-		_, previousDigest, err = helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace(), clientset)
+		previousDigest, err = processor.ComputeReleaseDigest(rel)
 		if err != nil {
-			return controller.ExternalObservation{}, fmt.Errorf("getting resources from previous release: %w", err)
+			return controller.ExternalObservation{}, fmt.Errorf("computing release digest from previous release: %w", err)
 		}
 	}
 	if digest != previousDigest {
@@ -292,16 +307,15 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}, nil
 	}
 
-	if rel.Chart.Metadata.Version != upgradedRel.Chart.Metadata.Version {
-		log.Debug("Composition package version mismatch.", "package", pkg.URL, "installed", rel.Chart.Metadata.Version, "expected", pkg.Version)
+	if rel.ChartVersion != upgradedRel.ChartVersion {
+		log.Debug("Composition package version mismatch.", "package", pkg.URL, "installed", rel.ChartVersion, "expected", pkg.Version)
 		return controller.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: false,
 		}, nil
 	}
 
-	err = setStatus(mg, &statusManagerOpts{
-		pluralizer:     h.pluralizer,
+	err = h.setStatus(mg, &statusManagerOpts{
 		force:          false,
 		resources:      nil, // we don't need to set resources here as they are already set when a resource is created/updated
 		previousDigest: previousDigest,
@@ -355,6 +369,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	compositionMeta.SetReleaseName(mg, compositionMeta.CalculateReleaseName(mg))
+	releaseName := compositionMeta.GetReleaseName(mg)
 	mg, err = tools.Update(ctx, mg, updateOpts)
 	if err != nil {
 		return fmt.Errorf("updating cr with values: %w", err)
@@ -377,7 +392,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
-		WithBaseName(compositionMeta.GetReleaseName(mg)).
+		WithBaseName(releaseName).
 		Generate(rbacgen.Parameters{
 			CompositionName:                mg.GetName(),
 			CompositionNamespace:           mg.GetNamespace(),
@@ -395,45 +410,65 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("installing rbac: %w", err)
 	}
 
-	// Install the helm chart
-	hc, clientset, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
+	hc, err := helm.NewClient(h.kubeconfig,
+		helm.WithNamespace(mg.GetNamespace()),
+		helm.WithLogger(h.getHelmLogger(meta.IsVerbose(mg))),
+	)
 	if err != nil {
-		return fmt.Errorf("getting helm client: %w", err)
+		return fmt.Errorf("creating helm client: %w", err)
 	}
 
-	opts := helmchart.InstallOptions{
-		CheckResourceOptions: helmchart.CheckResourceOptions{
-			DynamicClient: dyn,
-			Pluralizer:    h.pluralizer,
-		},
-		HelmClient:      hc,
-		ChartName:       pkg.URL,
-		Resource:        mg,
-		Repo:            pkg.Repo,
-		Version:         pkg.Version,
-		KrateoNamespace: krateoNamespace,
-		MaxHistory:      helmMaxHistory,
+	values, err := helmutils.ValuesFromSpec(mg)
+	if err != nil {
+		return fmt.Errorf("getting spec values: %w", err)
 	}
-	if pkg.RegistryAuth != nil {
-		opts.Credentials = &helmchart.Credentials{
-			Username: pkg.RegistryAuth.Username,
-			Password: pkg.RegistryAuth.Password,
+	err = values.InjectGlobalValues(mg, h.pluralizer, krateoNamespace)
+	if err != nil {
+		return fmt.Errorf("injecting global values: %w", err)
+	}
+	postrenderLabels, err := utils.LabelPostRenderFromSpec(mg, h.pluralizer, krateoNamespace)
+	if err != nil {
+		return fmt.Errorf("creating label post renderer: %w", err)
+	}
+
+	actionConfig := &helmconfig.ActionConfig{
+		ChartVersion:          pkg.Version,
+		ChartName:             pkg.Repo,
+		Values:                values,
+		Username:              pkg.Auth.Username,
+		Password:              pkg.Auth.Password,
+		InsecureSkipTLSverify: pkg.InsecureSkipTLSverify,
+		PostRenderer:          postrenderLabels,
+	}
+
+	// Check if the release already exists before attempting to install, this can happen if the create event is triggered after a failed install
+	rel, err := hc.GetRelease(ctx, releaseName, &helmconfig.GetConfig{})
+	if err != nil {
+		return fmt.Errorf("finding helm release: %w", err)
+	}
+	if rel != nil {
+		log.Debug("Release already exists, upgrading instead of installing.")
+		rel, err = hc.Upgrade(ctx, releaseName, pkg.URL, &helmconfig.UpgradeConfig{
+			ActionConfig: actionConfig,
+			MaxHistory:   helmMaxHistory,
+		})
+	} else {
+		rel, err = hc.Install(ctx, releaseName, pkg.URL, &helmconfig.InstallConfig{
+			ActionConfig: actionConfig,
+		})
+		if err != nil {
+			return fmt.Errorf("installing helm chart: %w", err)
 		}
 	}
 
-	rel, _, err := helmchart.Install(ctx, opts)
-	if err != nil {
-		return fmt.Errorf("installing helm chart: %w", err)
-	}
 	log.Debug("Installing composition package", "package", pkg.URL)
 
-	all, digest, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace(), clientset)
+	all, digest, err := processor.DecodeMinRelease(rel)
 	if err != nil {
-		return fmt.Errorf("getting resources from release: %w", err)
+		return fmt.Errorf("decoding release: %w", err)
 	}
 
-	err = setStatus(mg, &statusManagerOpts{
-		pluralizer:     h.pluralizer,
+	err = h.setStatus(mg, &statusManagerOpts{
 		force:          true,
 		resources:      all,
 		previousDigest: "",
@@ -466,6 +501,7 @@ func (h *handler) Create(ctx context.Context, mg *unstructured.Unstructured) err
 
 func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) error {
 	mg = mg.DeepCopy()
+	releaseName := compositionMeta.GetReleaseName(mg)
 
 	log := xcontext.Logger(ctx)
 
@@ -491,7 +527,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return nil
 	}
 
-	log.Debug("Handling composition values update.")
+	log.Debug("Handling composition update")
 
 	if h.packageInfoGetter == nil {
 		return fmt.Errorf("helm chart package info getter must be specified")
@@ -503,14 +539,21 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 
 	// Update the helm chart
-	hc, clientset, err := h.helmClientForResource(ctx, mg, pkg.RegistryAuth)
+	hc, err := helm.NewClient(h.kubeconfig,
+		helm.WithNamespace(mg.GetNamespace()),
+		helm.WithLogger(h.getHelmLogger(meta.IsVerbose(mg))),
+	)
 	if err != nil {
-		return fmt.Errorf("getting helm client: %w", err)
+		return fmt.Errorf("creating helm client: %w", err)
 	}
 
-	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
+	upgradedRel, err := hc.GetRelease(ctx, releaseName, &helmconfig.GetConfig{})
 	if err != nil {
-		return fmt.Errorf("finding helm release: %w", err)
+		return fmt.Errorf("getting helm release: %w", err)
+	}
+	if upgradedRel == nil {
+		log.Debug("Composition not found after upgrade.")
+		return fmt.Errorf("composition not found after upgrade")
 	}
 
 	previousDigest, err := maps.NestedString(mg.Object, "status", "digest")
@@ -518,12 +561,12 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("getting previous digest from status: %w", err)
 	}
 
-	all, digest, err := helmchart.GetResourcesRefFromRelease(rel, mg.GetNamespace(), clientset)
+	all, digest, err := processor.DecodeMinRelease(upgradedRel)
 	if err != nil {
-		return fmt.Errorf("getting resources from release: %w", err)
+		return fmt.Errorf("decoding release: %w", err)
 	}
 
-	managed, err := populateManagedResources(h.pluralizer, all)
+	managed, err := h.populateManagedResources(all)
 	if err != nil {
 		return fmt.Errorf("populating managed resources: %w", err)
 	}
@@ -534,7 +577,6 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 	h.eventRecorder.Event(mg, event.Normal(reasonUpdated, "Update", fmt.Sprintf("Updated composition: %s", mg.GetName())))
 
 	statusOpts := &statusManagerOpts{
-		pluralizer:     h.pluralizer,
 		force:          false,
 		resources:      all,
 		digest:         digest,
@@ -544,7 +586,7 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 		chartVersion:   pkg.Version,
 		conditionType:  ConditionTypeAvailable,
 	}
-	err = setStatus(mg, statusOpts)
+	err = h.setStatus(mg, statusOpts)
 	if err != nil {
 		return fmt.Errorf("setting status: %w", err)
 	}
@@ -578,6 +620,8 @@ func (h *handler) Update(ctx context.Context, mg *unstructured.Unstructured) err
 func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) error {
 	mg = mg.DeepCopy()
 
+	releaseName := compositionMeta.GetReleaseName(mg)
+
 	log := xcontext.Logger(ctx)
 
 	log = log.WithValues("op", "Delete").
@@ -606,9 +650,12 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("helm chart package info getter must be specified")
 	}
 
-	hc, _, err := h.helmClientForResource(ctx, mg, nil)
+	hc, err := helm.NewClient(h.kubeconfig,
+		helm.WithNamespace(mg.GetNamespace()),
+		helm.WithLogger(h.getHelmLogger(meta.IsVerbose(mg))),
+	)
 	if err != nil {
-		return fmt.Errorf("getting helm client: %w", err)
+		return fmt.Errorf("creating helm client: %w", err)
 	}
 
 	pkg, err := h.packageInfoGetter.WithLogger(log).Get(mg)
@@ -616,16 +663,8 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return fmt.Errorf("getting package info: %w", err)
 	}
 
-	chartSpec := helmclient.ChartSpec{
-		ReleaseName: compositionMeta.GetReleaseName(mg),
-		Namespace:   mg.GetNamespace(),
-		ChartName:   pkg.URL,
-		Version:     pkg.Version,
-		Wait:        false,
-	}
-
 	// Check if the release exists before uninstalling
-	rel, err := helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
+	rel, err := hc.GetRelease(ctx, releaseName, &helmconfig.GetConfig{})
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
@@ -635,17 +674,19 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 		return nil
 	}
 
-	err = hc.UninstallRelease(&chartSpec)
+	err = hc.Uninstall(ctx, releaseName, &helmconfig.UninstallConfig{
+		IgnoreNotFound: true,
+	})
 	if err != nil {
 		return fmt.Errorf("uninstalling helm chart: %w", err)
 	}
 
-	rel, err = helmchart.FindRelease(hc, compositionMeta.GetReleaseName(mg))
+	rel, err = hc.GetRelease(ctx, releaseName, &helmconfig.GetConfig{})
 	if err != nil {
 		return fmt.Errorf("finding helm release: %w", err)
 	}
 	if rel != nil {
-		return fmt.Errorf("composition not deleted, release %s still exists", compositionMeta.GetReleaseName(mg))
+		return fmt.Errorf("composition not deleted, release %s still exists", releaseName)
 	}
 
 	log.Debug("Uninstalling RBAC", "package", pkg.URL)
@@ -656,6 +697,7 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	}
 	chartInspector := chartinspector.NewChartInspector(h.chartInspectorUrl)
 	rbgen := rbacgen.NewRBACGen(h.saName, h.saNamespace, &chartInspector)
+
 	// Get Resources and generate RBAC
 	generated, err := rbgen.
 		WithBaseName(compositionMeta.GetReleaseName(mg)).
@@ -668,7 +710,8 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 			CompositionDefintionGVR:        pkg.CompositionDefinitionInfo.GVR,
 		})
 	if err != nil {
-		return fmt.Errorf("generating RBAC using chart-inspector: %w", err)
+		return fmt.Errorf("generating RBAC for composition %s/%s: %w",
+			mg.GetNamespace(), mg.GetName(), err)
 	}
 	rbInstaller := rbac.NewRBACInstaller(dyn)
 	err = rbInstaller.UninstallRBAC(generated)
@@ -688,77 +731,11 @@ func (h *handler) Delete(ctx context.Context, mg *unstructured.Unstructured) err
 	return nil
 }
 
-func (h *handler) helmClientForResource(ctx context.Context, mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth) (helmclient.Client, helmclient.CachedClientsInterface, error) {
-
-	log := xcontext.Logger(ctx)
-
-	log = log.WithValues("apiVersion", mg.GetAPIVersion()).
-		WithValues("kind", mg.GetKind()).
-		WithValues("name", mg.GetName()).
-		WithValues("namespace", mg.GetNamespace())
-
-	clientSet, err := helmclient.NewCachedClients(h.kubeconfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating cached helm client set: %w", err)
+func (h *handler) getHelmLogger(verbose bool) func(format string, v ...interface{}) {
+	if verbose {
+		return func(format string, v ...interface{}) {
+			slog.Debug(fmt.Sprintf(format, v...))
+		}
 	}
-
-	opts := &helmclient.Options{
-		Namespace:        mg.GetNamespace(),
-		RepositoryCache:  "/tmp/.helmcache",
-		RepositoryConfig: "/tmp/.helmrepo",
-		RegistryConfig:   helmRegistryConfigFile,
-		Debug:            true,
-		Linting:          false,
-		DebugLog: func(format string, v ...interface{}) {
-			if !meta.IsVerbose(mg) {
-				return
-			}
-
-			if len(v) > 0 {
-				log.Info(fmt.Sprintf(format, v))
-			} else {
-				log.Info(format)
-			}
-		},
-		RegistryAuth: (registryAuth),
-	}
-
-	hc, err := helmclient.NewCachedClientFromRestConf(
-		&helmclient.RestConfClientOptions{
-			Options:    opts,
-			RestConfig: h.kubeconfig,
-		},
-		clientSet,
-	)
-	return hc, clientSet, err
-}
-
-func (h *handler) helmClientForResourceWithTransportWrapper(mg *unstructured.Unstructured, registryAuth *helmclient.RegistryAuth, transportWrapper func(http.RoundTripper) http.RoundTripper) (helmclient.Client, helmclient.CachedClientsInterface, error) {
-	opts := &helmclient.Options{
-		Namespace:        mg.GetNamespace(),
-		RepositoryCache:  "/tmp/.helmcache",
-		RepositoryConfig: "/tmp/.helmrepo",
-		RegistryConfig:   helmRegistryConfigFile,
-		Debug:            true,
-		Linting:          false,
-		DebugLog:         func(format string, v ...interface{}) {},
-		RegistryAuth:     registryAuth,
-	}
-
-	clientSet, err := helmclient.NewCachedClients(h.kubeconfig)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cfg := rest.CopyConfig(h.kubeconfig)
-	cfg.WrapTransport = transportWrapper
-
-	hc, err := helmclient.NewCachedClientFromRestConf(
-		&helmclient.RestConfClientOptions{
-			Options:    opts,
-			RestConfig: cfg,
-		},
-		clientSet,
-	)
-	return hc, clientSet, err
+	return func(format string, v ...interface{}) {}
 }
