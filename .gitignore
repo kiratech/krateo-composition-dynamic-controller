@@ -52,4 +52,6 @@ cover.out
 .tool-versions
 **/*.xpkg
 
+.github/skills
+
 .vscode

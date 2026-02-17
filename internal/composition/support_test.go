@@ -3,8 +3,9 @@ package composition
 import (
 	"testing"
 
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/processor"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -23,11 +24,33 @@ func (m *mockPluralizer) GVKtoGVR(gvk schema.GroupVersionKind) (schema.GroupVers
 	return schema.GroupVersionResource{}, nil
 }
 
+func newTestMapper() *meta.DefaultRESTMapper {
+	// Define the versions the mapper should recognize
+	gvks := []schema.GroupVersion{
+		{Group: "apps", Version: "v1"},
+		{Group: "rbac.authorization.k8s.io", Version: "v1"},
+		{Group: "", Version: "v1"},
+	}
+
+	mapper := meta.NewDefaultRESTMapper(gvks)
+
+	// Add Namespaced resources
+	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}, meta.RESTScopeNamespace)
+	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"}, meta.RESTScopeNamespace)
+
+	// Add Cluster-scoped resources
+	mapper.Add(schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}, meta.RESTScopeRoot)
+	mapper.Add(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Node"}, meta.RESTScopeRoot)
+
+	return mapper
+}
+
 func TestPopulateManagedResources(t *testing.T) {
 	tests := []struct {
 		name        string
 		pluralizer  pluralizer.PluralizerInterface
-		resources   []objectref.ObjectRef
+		resources   []processor.MinimalMetadata
 		expected    []interface{}
 		expectError bool
 	}{
@@ -37,7 +60,7 @@ func TestPopulateManagedResources(t *testing.T) {
 				gvrMap: make(map[schema.GroupVersionKind]schema.GroupVersionResource),
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{},
+			resources: []processor.MinimalMetadata{},
 			expected:  []interface{}{},
 		},
 		{
@@ -48,8 +71,15 @@ func TestPopulateManagedResources(t *testing.T) {
 				},
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{
-				{APIVersion: "apps/v1", Kind: "Deployment", Name: "test-deployment", Namespace: "default"},
+			resources: []processor.MinimalMetadata{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Metadata: processor.Metadata{
+						Name:      "test-deployment",
+						Namespace: "default",
+					},
+				},
 			},
 			expected: []interface{}{
 				ManagedResource{
@@ -69,8 +99,8 @@ func TestPopulateManagedResources(t *testing.T) {
 				},
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{
-				{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "test-clusterrole", Namespace: ""},
+			resources: []processor.MinimalMetadata{
+				{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Metadata: processor.Metadata{Name: "test-clusterrole", Namespace: ""}},
 			},
 			expected: []interface{}{
 				ManagedResource{
@@ -90,8 +120,8 @@ func TestPopulateManagedResources(t *testing.T) {
 				},
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{
-				{APIVersion: "v1", Kind: "Pod", Name: "test-pod", Namespace: "default"},
+			resources: []processor.MinimalMetadata{
+				{APIVersion: "v1", Kind: "Pod", Metadata: processor.Metadata{Name: "test-pod", Namespace: "default"}},
 			},
 			expected: []interface{}{
 				ManagedResource{
@@ -111,8 +141,8 @@ func TestPopulateManagedResources(t *testing.T) {
 				},
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{
-				{APIVersion: "v1", Kind: "Node", Name: "test-node", Namespace: ""},
+			resources: []processor.MinimalMetadata{
+				{APIVersion: "v1", Kind: "Node", Metadata: processor.Metadata{Name: "test-node", Namespace: ""}},
 			},
 			expected: []interface{}{
 				ManagedResource{
@@ -133,9 +163,9 @@ func TestPopulateManagedResources(t *testing.T) {
 				},
 				errMap: make(map[schema.GroupVersionKind]error),
 			},
-			resources: []objectref.ObjectRef{
-				{APIVersion: "apps/v1", Kind: "Deployment", Name: "test-deployment", Namespace: "default"},
-				{APIVersion: "v1", Kind: "Service", Name: "test-service", Namespace: "default"},
+			resources: []processor.MinimalMetadata{
+				{APIVersion: "apps/v1", Kind: "Deployment", Metadata: processor.Metadata{Name: "test-deployment", Namespace: "default"}},
+				{APIVersion: "v1", Kind: "Service", Metadata: processor.Metadata{Name: "test-service", Namespace: "default"}},
 			},
 			expected: []interface{}{
 				ManagedResource{
@@ -158,7 +188,11 @@ func TestPopulateManagedResources(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := populateManagedResources(tt.pluralizer, tt.resources)
+			h := &handler{
+				pluralizer: tt.pluralizer,
+				mapper:     newTestMapper(),
+			}
+			result, err := h.populateManagedResources(tt.resources)
 
 			if tt.expectError && err == nil {
 				t.Fatal("expected error but got none")

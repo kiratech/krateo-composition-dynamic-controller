@@ -8,7 +8,6 @@ import (
 
 	compositionMeta "github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
 
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/helmclient"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/logging"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,6 +23,11 @@ type CompositionDefinitionInfo struct {
 	GVR       schema.GroupVersionResource
 }
 
+type Auth struct {
+	Username string
+	Password string
+}
+
 type Info struct {
 	// URL of the helm chart package that is being requested.
 	URL string `json:"url"`
@@ -34,8 +38,11 @@ type Info struct {
 	// Repo is the repository name.
 	Repo string `json:"repo,omitempty"`
 
-	// RegistryAuth is the credentials to access the registry.
-	RegistryAuth *helmclient.RegistryAuth `json:"registryAuth,omitempty"`
+	// Auth is the credentials to access the chart registry, if needed.
+	Auth *Auth `json:"auth,omitempty"`
+
+	// InsecureSkipTLSverify indicates whether to skip TLS verification.
+	InsecureSkipTLSverify bool `json:"insecureSkipTLSverify,omitempty"`
 
 	// CompositionDefinitionInfo is the information about the composition definition.
 	CompositionDefinitionInfo *CompositionDefinitionInfo `json:"compositionDefinitionInfo,omitempty"`
@@ -246,11 +253,11 @@ func (g *dynamicGetter) Get(uns *unstructured.Unstructured) (*Info, error) {
 		URL:     packageUrl,
 		Version: packageVersion,
 		Repo:    repo,
-		RegistryAuth: &helmclient.RegistryAuth{
-			Username:              username,
-			Password:              password,
-			InsecureSkipTLSverify: insecureSkipTLSverify,
+		Auth: &Auth{
+			Username: username,
+			Password: password,
 		},
+		InsecureSkipTLSverify: insecureSkipTLSverify,
 		CompositionDefinitionInfo: &CompositionDefinitionInfo{
 			Name:      compositionDefinition.GetName(),
 			Namespace: compositionDefinition.GetNamespace(),

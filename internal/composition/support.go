@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	compositionCondition "github.com/krateoplatformops/composition-dynamic-controller/internal/condition"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/dynamic"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/processor"
 	"github.com/krateoplatformops/plumbing/maps"
 
-	"github.com/krateoplatformops/unstructured-runtime/pkg/controller/objectref"
-	"github.com/krateoplatformops/unstructured-runtime/pkg/pluralizer"
 	unstructuredtools "github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured"
 	"github.com/krateoplatformops/unstructured-runtime/pkg/tools/unstructured/condition"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -67,23 +67,22 @@ const (
 
 type statusManagerOpts struct {
 	force          bool
-	pluralizer     pluralizer.PluralizerInterface
 	chartURL       string
 	chartVersion   string
-	resources      []objectref.ObjectRef
+	resources      []processor.MinimalMetadata
 	previousDigest string
 	digest         string
 	message        string
 	conditionType  ConditionType
 }
 
-func setStatus(mg *unstructured.Unstructured, opts *statusManagerOpts) error {
+func (h *handler) setStatus(mg *unstructured.Unstructured, opts *statusManagerOpts) error {
 	if opts == nil {
 		return fmt.Errorf("status manager options are nil")
 	}
 
 	if len(opts.resources) > 0 {
-		managed, err := populateManagedResources(opts.pluralizer, opts.resources)
+		managed, err := h.populateManagedResources(opts.resources)
 		if err != nil {
 			return fmt.Errorf("populating managed resources: %w", err)
 		}
@@ -131,12 +130,21 @@ func setManagedResources(mg *unstructured.Unstructured, managed []any) {
 	mg.Object["status"] = mapstatus
 }
 
-func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resources []objectref.ObjectRef) ([]any, error) {
+func (h *handler) populateManagedResources(resources []processor.MinimalMetadata) ([]any, error) {
 	var managed []interface{}
 	for _, ref := range resources {
-		gvr, err := pluralizer.GVKtoGVR(schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind))
+		gvr, err := h.pluralizer.GVKtoGVR(schema.FromAPIVersionAndKind(ref.GetAPIVersion(), ref.GetKind()))
 		if err != nil {
-			return nil, fmt.Errorf("getting GVR for %s: %w", ref.String(), err)
+			return nil, fmt.Errorf("getting GVR for %s/%s with name %s and namespace %s: %w", ref.GetAPIVersion(), ref.GetKind(), ref.GetName(), ref.GetNamespace(), err)
+		}
+
+		gvk := schema.FromAPIVersionAndKind(ref.GetAPIVersion(), ref.GetKind())
+		isNamespaced, err := dynamic.IsNamespaced(h.mapper, gvk)
+		if err != nil {
+			return nil, fmt.Errorf("getting REST mapping for %s: %w", gvk.String(), err)
+		}
+		if !isNamespaced {
+			ref.SetNamespace("")
 		}
 
 		buildpath := func() string {
@@ -146,21 +154,22 @@ func populateManagedResources(pluralizer pluralizer.PluralizerInterface, resourc
 				prefix = "/api/" + gvr.Version
 			}
 
-			suffix := "/namespaces/" + ref.Namespace + "/" + gvr.Resource + "/" + ref.Name
+			suffix := "/namespaces/" + ref.GetNamespace() + "/" + gvr.Resource + "/" + ref.GetName()
 			// Cluster scoped resources
-			if len(ref.Namespace) == 0 {
-				suffix = "/" + gvr.Resource + "/" + ref.Name
+			if len(ref.GetNamespace()) == 0 {
+				suffix = "/" + gvr.Resource + "/" + ref.GetName()
 			}
 			if len(gvr.Group) == 0 {
 				return prefix + suffix
 			}
 			return prefix + suffix
 		}
+
 		managed = append(managed, ManagedResource{
-			APIVersion: ref.APIVersion,
+			APIVersion: ref.GetAPIVersion(),
 			Resource:   gvr.Resource,
-			Name:       ref.Name,
-			Namespace:  ref.Namespace,
+			Name:       ref.GetName(),
+			Namespace:  ref.GetNamespace(),
 			Path:       buildpath(),
 		})
 	}

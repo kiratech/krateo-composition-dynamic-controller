@@ -21,7 +21,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/composition"
 	"github.com/krateoplatformops/composition-dynamic-controller/internal/meta"
-	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/helmchart/archive"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/archive"
+	"github.com/krateoplatformops/composition-dynamic-controller/internal/tools/dynamic"
 	"github.com/krateoplatformops/plumbing/env"
 	"github.com/krateoplatformops/plumbing/kubeutil/event"
 	"github.com/krateoplatformops/plumbing/kubeutil/eventrecorder"
@@ -165,7 +166,13 @@ func main() {
 	}
 	labelselector := labels.NewSelector().Add(*labelreq)
 
-	handler := composition.NewHandler(cfg, pig, *event.NewAPIRecorder(rec), *pluralizer, *urlChartInspector, *saName, *saNamespace)
+	mapper, err := dynamic.NewRESTMapper(cfg)
+	if err != nil {
+		log.Error(err, "Creating RESTMapper.")
+		os.Exit(1)
+	}
+
+	handler := composition.NewHandler(cfg, pig, *event.NewAPIRecorder(rec), *pluralizer, mapper, *urlChartInspector, *saName, *saNamespace)
 
 	opts := []builder.FuncOption{
 		builder.WithLogger(log),

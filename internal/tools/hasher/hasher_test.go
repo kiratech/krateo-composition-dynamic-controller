@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+func BenchmarkHashManySmallStrings(b *testing.B) {
+	b.ReportAllocs()
+
+	const numStrings = 100000
+	const strSize = 64
+
+	// Prepariamo i dati fuori dal timer
+	data := make([]string, numStrings)
+	for i := range data {
+		data[i] = strings.Repeat("y", strSize)
+	}
+
+	b.SetBytes(int64(numStrings * strSize))
+
+	h := NewFNVObjectHash()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		h.Reset()
+		// Testiamo specificamente la funzione ottimizzata per varargs di stringhe
+		if err := h.SumHashStrings(data...); err != nil {
+			b.Fatalf("SumHashStrings failed: %v", err)
+		}
+	}
+}
+
 func BenchmarkHashLargeMap(b *testing.B) {
 	b.ReportAllocs()
 
@@ -51,6 +77,29 @@ func BenchmarkHashLargeMap(b *testing.B) {
 	}
 }
 
+func BenchmarkHashLargeString(b *testing.B) {
+	b.ReportAllocs()
+
+	// Configurazione: una singola stringa enorme (es. 100MB)
+	const strSize = 100 * 1024 * 1024 // 100 MB
+	largeStr := strings.Repeat("x", strSize)
+
+	// Impostiamo i bytes processati per calcolare il throughput (MB/s)
+	b.SetBytes(int64(strSize))
+
+	h := NewFNVObjectHash()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		h.Reset()
+		// Qui testiamo SumHash con una stringa diretta.
+		// Grazie all'ottimizzazione, questo dovrebbe evitare json.Marshal
+		// e usare la conversione zero-copy.
+		if err := h.SumHash(largeStr); err != nil {
+			b.Fatalf("SumHash failed: %v", err)
+		}
+	}
+}
 func BenchmarkHash(b *testing.B) {
 	input := []any{"test", 123, true, "another string", 456.78}
 
