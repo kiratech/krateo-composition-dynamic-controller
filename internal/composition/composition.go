@@ -179,11 +179,12 @@ func (h *handler) Observe(ctx context.Context, mg *unstructured.Unstructured) (c
 		}, nil
 	}
 
-	if rel.Status == helmconfig.StatusPendingInstall || rel.Status == helmconfig.StatusPendingUpgrade {
+	if rel.Status == helmconfig.StatusPendingInstall || rel.Status == helmconfig.StatusPendingUpgrade || rel.Status == helmconfig.StatusPendingRollback {
 		log.Debug("Composition stuck install or upgrade in progress. Rolling back to previous release before re-attempting.")
 		// Rollback to previous release
 		rel, err = hc.Rollback(ctx, releaseName, &helmconfig.RollbackConfig{
-			MaxHistory: helmMaxHistory,
+			MaxHistory:     helmMaxHistory,
+			ReleaseVersion: rel.Revision,
 		})
 		if err != nil {
 			return controller.ExternalObservation{}, fmt.Errorf("rolling back release: %w", err)
